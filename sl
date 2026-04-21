@@ -70,9 +70,9 @@ _sl_diff_and_log() {
 
     # Dish rebooted if boots increased, OR uptime went backwards
     if [[ "$cb" != "$pb" ]]; then
-      _sl_log "REBOOT" "dish rebooted (boots $pb→$cb)"
+      _sl_log "REBOOT" "dish rebooted (boots ${pb}→${cb})"
     elif (( cu < pu )); then
-      _sl_log "REBOOT" "dish uptime reset ($pu→${cu}s, same bootcount $cb)"
+      _sl_log "REBOOT" "dish uptime reset (${pu}→${cu}s, same bootcount ${cb})"
     fi
     # Gap = we were away. Attribute cause.
     if (( gap > 30 )); then
