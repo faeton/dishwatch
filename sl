@@ -530,23 +530,36 @@ watch_dash() {
   printf '\e[?1049h\e[?25l'
   stty -icanon -echo min 0 time 0 2>/dev/null || true
   export SL_WATCH=1
+  local phases=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local pi=0
   while :; do
     local out; out=$(dash)
     printf '\e[H'
     printf '%s\n' "$out" | awk '{printf "%s\033[K\n", $0}'
     printf '\e[J'
-    # Wait for keypress with timeout == refresh interval
-    local key=""
-    if IFS= read -rsn1 -t "$every" key 2>/dev/null; then
-      case "$key" in q|Q) break ;; esac
-    fi
+    # Cursor now sits on the empty line right below the dash. Draw the spinner
+    # there, then redraw it each second in place (\r + erase-to-EOL).
+    local remaining=$every key=""
+    while (( remaining > 0 )); do
+      local glyph="${phases[pi]}"
+      pi=$(( (pi + 1) % ${#phases[@]} ))
+      printf '\r\e[K  %s%s  next refresh in %ss · r=now  q=quit%s' \
+        "$C_DIM" "$glyph" "$remaining" "$R"
+      if IFS= read -rsn1 -t 1 key 2>/dev/null; then
+        case "$key" in
+          q|Q) break 2 ;;
+          r|R|' ') break ;;
+        esac
+      fi
+      remaining=$((remaining-1))
+    done
   done
 }
 
 cmd="${1:-status}"
 case "$cmd" in
   dash|d)    dash ;;
-  watch|w)   watch_dash "${2:-5}" ;;
+  watch|w)   watch_dash "${2:-3}" ;;
   events|ev) tail -n "${2:-40}" "$SL_EVENTS" 2>/dev/null || echo "no events yet ($SL_EVENTS)" ;;
   speed|speedtest) speedtest_run ;;
   status)
