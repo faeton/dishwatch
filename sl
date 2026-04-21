@@ -9,7 +9,33 @@ SL_STATE="$SL_CACHE/state.json"
 SL_EVENTS="$SL_CACHE/events.log"
 mkdir -p "$SL_CACHE"
 
+for _bin in grpcurl jq; do
+  if ! command -v "$_bin" >/dev/null 2>&1; then
+    printf '\e[38;5;174mmissing dependency:\e[0m %s\n' "$_bin" >&2
+    printf '  install with: brew install grpcurl jq\n' >&2
+    exit 127
+  fi
+done
+unset _bin
+
 call() { grpcurl -plaintext -max-time 4 -d "$1" "$DISH" "$SVC"; }
+
+# Friendly unreachable message for commands that don't have their own handling.
+_sl_die_unreachable() {
+  printf '\e[38;5;174mdish unreachable\e[0m at %s\n' "$DISH" >&2
+  printf '  · not on the Starlink network? check Wi-Fi / ethernet\n' >&2
+  printf '  · dish rebooting or powered off?\n' >&2
+  printf '  · try: ping 192.168.100.1\n' >&2
+  if [[ -s "$SL_STATE" ]]; then
+    local ts age
+    ts=$(jq -r .ts "$SL_STATE" 2>/dev/null || echo 0)
+    age=$(( $(date +%s) - ts ))
+    printf '  · last seen %ss ago — run \x1b[38;5;253msl dash\x1b[0m for frozen snapshot + events\n' "$age" >&2
+  fi
+  _sl_mark_unreachable 2>/dev/null || true
+  exit 1
+}
+safe_call() { call "$1" 2>/dev/null || _sl_die_unreachable; }
 
 # Event logger: "YYYY-MM-DD HH:MM:SS  TAG  message"
 _sl_log() {
@@ -524,7 +550,7 @@ case "$cmd" in
   events|ev) tail -n "${2:-40}" "$SL_EVENTS" 2>/dev/null || echo "no events yet ($SL_EVENTS)" ;;
   speed|speedtest) speedtest_run ;;
   status)
-    call '{"get_status":{}}' | jq -r '
+    safe_call '{"get_status":{}}' | jq -r '
       .dishGetStatus as $s |
       ($s.deviceState.uptimeS | tonumber) as $up |
       ($s.obstructionStats // {}) as $o |
@@ -550,7 +576,7 @@ case "$cmd" in
       ] | .[]'
     ;;
   history)
-    call '{"get_history":{}}' | jq '.dishGetHistory | {
+    safe_call '{"get_history":{}}' | jq '.dishGetHistory | {
       samples: (.popPingLatencyMs | length),
       popPingLatencyMsMean: ([.popPingLatencyMs[]? | select(.>0)] | if length>0 then add/length else 0 end),
       popPingDropRateMean:  ([.popPingDropRate[]?] | if length>0 then add/length else 0 end),
@@ -558,9 +584,9 @@ case "$cmd" in
       uplinkMbpsMean:   ([.uplinkThroughputBps[]?]   | if length>0 then add/length/1e6 else 0 end)
     }'
     ;;
-  location) call '{"get_location":{}}' ;;
-  map)      call '{"dish_get_obstruction_map":{}}' | jq '.dishGetObstructionMap | {numRows, numCols, snrCells: (.snr|length)}' ;;
-  reboot)   call '{"reboot":{}}' ;;
-  raw)      call "${2:-{\"get_status\":{}\}}" | jq . ;;
+  location) safe_call '{"get_location":{}}' ;;
+  map)      safe_call '{"dish_get_obstruction_map":{}}' | jq '.dishGetObstructionMap | {numRows, numCols, snrCells: (.snr|length)}' ;;
+  reboot)   safe_call '{"reboot":{}}' ;;
+  raw)      safe_call "${2:-{\"get_status\":{}\}}" | jq . ;;
   *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|raw '<json>']" >&2; exit 1 ;;
 esac
