@@ -532,25 +532,29 @@ watch_dash() {
   export SL_WATCH=1
   local phases=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local pi=0
+  local spinner_fps=5
   while :; do
     local out; out=$(dash)
     printf '\e[H'
     printf '%s\n' "$out" | awk '{printf "%s\033[K\n", $0}'
     printf '\e[J'
     # Cursor now sits on the empty line right below the dash. Draw the spinner
-    # there, then redraw it each second in place (\r + erase-to-EOL).
+    # there, then redraw it in place while counting down to the next refresh.
     local remaining=$every key=""
     while (( remaining > 0 )); do
-      local glyph="${phases[pi]}"
-      pi=$(( (pi + 1) % ${#phases[@]} ))
-      printf '\r\e[K  %s%s  next refresh in %ss · r=now  q=quit%s' \
-        "$C_DIM" "$glyph" "$remaining" "$R"
-      if IFS= read -rsn1 -t 1 key 2>/dev/null; then
-        case "$key" in
-          q|Q) break 2 ;;
-          r|R|' ') break ;;
-        esac
-      fi
+      local tick
+      for (( tick=0; tick<spinner_fps && remaining>0; tick++ )); do
+        local glyph="${phases[pi]}"
+        pi=$(( (pi + 1) % ${#phases[@]} ))
+        printf '\r\e[K  %s%s  next refresh in %ss · r=now  q=quit%s' \
+          "$C_DIM" "$glyph" "$remaining" "$R"
+        if IFS= read -rsn1 -t 0.2 key 2>/dev/null; then
+          case "$key" in
+            q|Q) break 3 ;;
+            r|R|' ') break 2 ;;
+          esac
+        fi
+      done
       remaining=$((remaining-1))
     done
   done
