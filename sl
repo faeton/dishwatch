@@ -528,7 +528,7 @@ watch_dash() {
   trap '_sl_restore; exit 0' INT TERM EXIT
   # Alt screen + hide cursor + raw input (no echo, non-blocking read)
   printf '\e[?1049h\e[?25l'
-  stty -icanon -echo min 0 time 0 2>/dev/null
+  stty -icanon -echo min 0 time 0 2>/dev/null || true
   export SL_WATCH=1
   while :; do
     local out; out=$(dash)
