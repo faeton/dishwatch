@@ -521,7 +521,20 @@ watch_dash() {
   local every="${1:-2}"
   # Globals so the EXIT trap can see them after the function returns
   SL_OLD_STTY=$(stty -g 2>/dev/null || echo "")
+  SL_WATCH_PID=""
+  SL_WATCH_TMP=""
+  _sl_stop_watch_job() {
+    [[ -z "${SL_WATCH_PID:-}" ]] && return 0
+    local child_pids=""
+    child_pids=$(pgrep -P "$SL_WATCH_PID" 2>/dev/null || true)
+    [[ -n "$child_pids" ]] && kill $child_pids 2>/dev/null || true
+    kill "$SL_WATCH_PID" 2>/dev/null || true
+    wait "$SL_WATCH_PID" 2>/dev/null || true
+    SL_WATCH_PID=""
+  }
   _sl_restore() {
+    _sl_stop_watch_job
+    [[ -n "${SL_WATCH_TMP:-}" ]] && rm -f "$SL_WATCH_TMP" 2>/dev/null || true
     [[ -n "${SL_OLD_STTY:-}" ]] && stty "$SL_OLD_STTY" 2>/dev/null
     printf '\e[?25h\e[?1049l'
   }
@@ -534,7 +547,33 @@ watch_dash() {
   local pi=0
   local spinner_fps=5
   while :; do
-    local out; out=$(dash)
+    SL_WATCH_TMP=$(mktemp "$SL_CACHE/watch.XXXXXX")
+    ( dash > "$SL_WATCH_TMP" ) &
+    SL_WATCH_PID=$!
+
+    # Keep the wait indicator alive while dash gathers fresh data from the dish.
+    local key=""
+    while kill -0 "$SL_WATCH_PID" 2>/dev/null; do
+      local glyph="${phases[pi]}"
+      pi=$(( (pi + 1) % ${#phases[@]} ))
+      printf '\r\e[K  %s%s  refreshing from dishy...  q=quit%s' \
+        "$C_WARN" "$glyph" "$R"
+      if IFS= read -rsn1 -t 0.2 key 2>/dev/null; then
+        case "$key" in
+          q|Q)
+            _sl_stop_watch_job
+            break 2
+            ;;
+        esac
+      fi
+    done
+
+    wait "$SL_WATCH_PID" || true
+    SL_WATCH_PID=""
+
+    local out; out=$(cat "$SL_WATCH_TMP")
+    rm -f "$SL_WATCH_TMP"
+    SL_WATCH_TMP=""
     printf '\e[H'
     printf '%s\n' "$out" | awk '{printf "%s\033[K\n", $0}'
     printf '\e[J'
