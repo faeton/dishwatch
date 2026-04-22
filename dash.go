@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -15,11 +16,22 @@ import (
 func runDash(ctx context.Context) error {
 	c, err := dialDish(ctx)
 	if err != nil {
-		return renderUnreachable(ctx, err)
+		return renderUnreachable(os.Stdout, false, err)
 	}
 	defer c.Close()
 
-	// Fetch status + history in parallel — they're independent.
+	s, h, err := fetchDash(ctx, c)
+	if err != nil {
+		return renderUnreachable(os.Stdout, false, err)
+	}
+	L := ui.DetectLayout()
+	renderDash(os.Stdout, s, h, L, false)
+	return nil
+}
+
+// fetchDash fetches status + history in parallel. history may be nil if that
+// call failed; status failure is fatal.
+func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History, error) {
 	type statusRes struct {
 		s   *dish.Status
 		err error
@@ -34,30 +46,30 @@ func runDash(ctx context.Context) error {
 	go func() { h, e := c.GetHistory(ctx); hCh <- histRes{h, e} }()
 	sr := <-sCh
 	hr := <-hCh
-
 	if sr.err != nil {
-		return renderUnreachable(ctx, sr.err)
+		return nil, nil, sr.err
 	}
-	s := sr.s
-	h := hr.h // may be nil if history fetch failed; handled below
-
-	L := ui.DetectLayout()
-	renderDash(s, h, L)
-	return nil
+	return sr.s, hr.h, nil
 }
 
-func renderUnreachable(_ context.Context, err error) error {
-	fmt.Printf("\x1b[H\x1b[J\n")
-	fmt.Printf("  %sStarlink%s  %s● UNREACHABLE%s\n",
+func renderUnreachable(w io.Writer, inWatch bool, err error) error {
+	if !inWatch {
+		fmt.Fprint(w, "\x1b[H\x1b[J")
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  %sStarlink%s  %s● UNREACHABLE%s\n",
 		ui.Hdr, ui.Rst, ui.Err, ui.Rst)
-	fmt.Printf("  %s%v%s\n", ui.Dim, err, ui.Rst)
+	fmt.Fprintf(w, "  %s%v%s\n", ui.Dim, err, ui.Rst)
 	return nil
 }
 
-func renderDash(s *dish.Status, h *dish.History, L ui.Layout) {
-	// Clear screen unless we're inside a watch loop (caller positions cursor).
-	// We don't have a watch yet — always clear.
-	fmt.Print("\x1b[H\x1b[J\n")
+func renderDash(w io.Writer, s *dish.Status, h *dish.History, L ui.Layout, inWatch bool) {
+	// In watch mode the caller positions the cursor at (0,0) and pads lines
+	// to the right edge themselves, so we skip the clear.
+	if !inWatch {
+		fmt.Fprint(w, "\x1b[H\x1b[J")
+	}
+	fmt.Fprintln(w)
 
 	// State machine
 	state := s.State
@@ -79,11 +91,11 @@ func renderDash(s *dish.Status, h *dish.History, L ui.Layout) {
 
 	// Header
 	upH := float64(s.DeviceState.UptimeS) / 3600
-	fmt.Printf("  %sStarlink%s  %s●%s %s%s  %s%s · %s · %s%s  %sup %.1fh · boots %d%s\n",
+	fmt.Fprintf(w, "  %sStarlink%s  %s●%s %s%s  %s%s · %s · %s%s  %sup %.1fh · boots %d%s\n",
 		ui.Hdr, ui.Rst, dotColor, ui.Rst, ui.Val, state,
 		ui.Dim, dashIf(s.ClassOfService), dashIf(s.MobilityClass), dashIf(s.DeviceInfo.CountryCode), ui.Rst,
 		ui.Dim, upH, s.DeviceInfo.Bootcount, ui.Rst)
-	fmt.Printf("  %s%s · fw %s%s\n\n",
+	fmt.Fprintf(w, "  %s%s · fw %s%s\n\n",
 		ui.Dim, s.DeviceInfo.HardwareVersion, s.DeviceInfo.SoftwareVersion, ui.Rst)
 
 	// Derived values
@@ -247,29 +259,29 @@ func renderDash(s *dish.Status, h *dish.History, L ui.Layout) {
 			if i < len(Rcol) {
 				r = Rcol[i]
 			}
-			fmt.Println(ui.Row(l, r, L.LeftColW))
+			fmt.Fprintln(w, ui.Row(l, r, L.LeftColW))
 		}
 	} else {
 		// narrow terminal: stack columns
 		for _, l := range Lcol {
-			fmt.Println(l)
+			fmt.Fprintln(w, l)
 		}
 		for _, r := range Rcol {
-			fmt.Println(r)
+			fmt.Fprintln(w, r)
 		}
 	}
 
 	// Sparklines
 	if h != nil {
-		renderSparklines(h, L)
+		renderSparklines(w, h, L)
 	}
 
-	fmt.Printf("\n%s  %s · %s%s\n",
+	fmt.Fprintf(w, "\n%s  %s · %s%s\n",
 		ui.Dim, envOr("STARLINK_DISH", "192.168.100.1:9200"),
 		time.Now().Format("15:04:05"), ui.Rst)
 }
 
-func renderSparklines(h *dish.History, L ui.Layout) {
+func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 	pings := h.LastN(h.PopPingLatencyMs, L.SparkW)
 	drops := h.LastN(h.PopPingDropRate, L.SparkW)
 	dn := h.LastN(h.DownlinkThroughputBps, L.SparkW)
@@ -288,20 +300,20 @@ func renderSparklines(h *dish.History, L ui.Layout) {
 	upAvg := mean(up) / 1e6
 	upMax := maxf(up) / 1e6
 
-	fmt.Printf("\n%s⏱ Last %ds %s%s\n", ui.Hdr, L.SparkW, ui.HR(L.Width-14), ui.Rst)
-	fmt.Printf("  %sPing  %s%s%s  %savg %.1f ms · max %.1f ms · p95 %.1f ms · drop %.1f%%%s\n",
+	fmt.Fprintf(w, "\n%s⏱ Last %ds %s%s\n", ui.Hdr, L.SparkW, ui.HR(L.Width-14), ui.Rst)
+	fmt.Fprintf(w, "  %sPing  %s%s%s  %savg %.1f ms · max %.1f ms · p95 %.1f ms · drop %.1f%%%s\n",
 		ui.Lbl, ui.OK, ui.Spark(pings, 0), ui.Rst, ui.Dim, pingAvg, pingMax, pingP95, dropAvg, ui.Rst)
-	fmt.Printf("  %sDrop  %s%s%s  %sper-second loss · peak %.1f%%%s\n",
+	fmt.Fprintf(w, "  %sDrop  %s%s%s  %sper-second loss · peak %.1f%%%s\n",
 		ui.Lbl, ui.Err, ui.Spark(drops, 0), ui.Rst, ui.Dim, dropMax, ui.Rst)
-	fmt.Printf("  %sDown  %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
+	fmt.Fprintf(w, "  %sDown  %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
 		ui.Lbl, ui.OK, ui.Spark(dn, 0), ui.Rst, ui.Dim, dnAvg, dnMax, ui.Rst)
-	fmt.Printf("  %sUp    %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
+	fmt.Fprintf(w, "  %sUp    %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
 		ui.Lbl, ui.OK, ui.Spark(up, 0), ui.Rst, ui.Dim, upAvg, upMax, ui.Rst)
 
 	if len(pw) > 0 && maxf(pw) > 0 {
 		pwNow := pw[len(pw)-1]
 		pwAvg, pwMax := meanPositive(pw)
-		fmt.Printf("  %sPower %s%s%s  %snow %.1f W  avg %.1f W  max %.1f W%s\n",
+		fmt.Fprintf(w, "  %sPower %s%s%s  %snow %.1f W  avg %.1f W  max %.1f W%s\n",
 			ui.Lbl, ui.Warn, ui.Spark(pw, 0), ui.Rst, ui.Dim, pwNow, pwAvg, pwMax, ui.Rst)
 	}
 }
