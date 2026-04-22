@@ -30,7 +30,7 @@ sl history            # 60s rolling means from the dish
 sl location           # raw GPS (if enabled in the Starlink app)
 sl map                # obstruction map summary
 sl reboot             # reboot the dish
-sl pb [pct]           # anchor current power-bank % (or show the anchor)
+sl pb [pct [wh] | -]  # anchor power-bank % (and optional Wh); `-` clears; no args = show
 sl raw '<json>'       # send an arbitrary gRPC request
 ```
 
@@ -67,32 +67,34 @@ comes back.
   refresh. Resets when the dish reboots. Shows `since boot` once the observation
   window covers the full uptime; otherwise shows observed Wh plus a linear
   extrapolation to total.
-- **Power-bank depletion**: with a Wh-per-full-charge calibration (see below),
-  shows % remaining, Wh remaining, and estimated time to 0% at the current
-  average draw.
+- **Power-bank depletion** (opt-in, only shown when `SL_PB_WH` is set): with a
+  Wh-per-full-charge calibration (see below), shows % remaining, Wh remaining,
+  and estimated time to 0% at the current average draw.
 
 ## Power-bank tracking
 
-Once you know your bank's real dish-input Wh capacity (calibrate by comparing
-bank-% drops against integrated Wh over a session), two env vars tune the
-depletion estimate:
+The Bank row is hidden unless you either set an anchor with a Wh capacity or
+export `SL_PB_WH` — if you're running off mains, leave both unset. The easiest
+path is to anchor both pct and bank capacity in one command before starting
+`sl watch`:
 
 ```sh
-export SL_PB_WH=67          # dish-input Wh per full charge (default: 67)
+sl pb 100 67    # "bank is at 100% right now, full charge = 67 Wh"
+sl pb 44        # update current %, keep existing Wh
+sl pb           # show the active anchor
+sl pb -         # clear the anchor (hides the Bank row unless SL_PB_WH is set)
+```
+
+The anchor (pct + wh) lives in `~/.cache/sl/pb.json` and survives across
+sessions. As a fallback, env vars still work:
+
+```sh
+export SL_PB_WH=67          # dish-input Wh per full charge (enables Bank row)
 export SL_PB_START_PCT=100  # bank % when the dish booted (default: 100)
 ```
 
-To avoid the "what % was the bank at boot?" guessing game, anchor the current
-reading instead:
-
-```sh
-sl pb 44    # "the bank is at 44% right now" — counts depletion from here on
-sl pb       # show the active anchor
-```
-
-The anchor lives in `~/.cache/sl/pb.json`. It auto-invalidates on dish reboot
-(bootcount mismatch), falling back to the `SL_PB_START_PCT` assumption until
-you set a new one.
+The anchor auto-invalidates on dish reboot (bootcount mismatch), falling back
+to the `SL_PB_START_PCT` assumption until you set a new one.
 
 ### Calibrating `SL_PB_WH`
 

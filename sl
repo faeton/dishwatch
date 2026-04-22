@@ -10,7 +10,7 @@ SL_EVENTS="$SL_CACHE/events.log"
 SL_PB_ANCHOR="$SL_CACHE/pb.json"
 # Power-bank model. Wh = dish-input energy per full 100% charge (calibrated
 # via bank-% vs integrated Wh). Override with env vars.
-SL_PB_WH="${SL_PB_WH:-67}"
+SL_PB_WH="${SL_PB_WH:-}"
 SL_PB_START_PCT="${SL_PB_START_PCT:-100}"
 mkdir -p "$SL_CACHE"
 
@@ -553,32 +553,37 @@ dash() {
       fi
 
       # ---------- power-bank depletion estimate ----------
-      # Prefer an explicit anchor (set via `sl pb <pct>`): depletion counted
-      # directly from integrated Wh since anchor — no extrapolation. If the
-      # anchor's bootcount doesn't match the current boot, it's stale.
-      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_boots="" anchor_source=""
+      # Opt-in: shown when `sl pb <pct> [wh]` set an anchor with wh, OR when
+      # SL_PB_WH env var is set (>0). Anchor depletion is counted directly
+      # from integrated Wh since anchor — no extrapolation. If the anchor's
+      # bootcount doesn't match the current boot, it's stale.
+      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_boots="" anchor_wh="" anchor_source=""
       if [[ -s "$SL_PB_ANCHOR" ]]; then
         eval "$(jq -r '
           @sh "anchor_pct=\(.pct // "")",
           @sh "anchor_energy=\(.energyWh // "")",
           @sh "anchor_ts=\(.ts // "")",
-          @sh "anchor_boots=\(.boots // "")"' "$SL_PB_ANCHOR" 2>/dev/null || true)"
+          @sh "anchor_boots=\(.boots // "")",
+          @sh "anchor_wh=\(.wh // "")"' "$SL_PB_ANCHOR" 2>/dev/null || true)"
       fi
+      # Effective bank Wh: anchor wins, else env var.
+      local pb_cap="${anchor_wh:-$SL_PB_WH}"
+      if [[ -n "$pb_cap" ]] && awk "BEGIN{exit !($pb_cap+0 > 0)}"; then
       local pb_pct_left pb_used_wh pb_start_pct
       if [[ -n "$anchor_boots" && "$anchor_boots" == "$BOOTS" && -n "$anchor_energy" && -n "$anchor_pct" ]]; then
         pb_used_wh=$(awk "BEGIN{d=$ENERGY_WH-$anchor_energy; if(d<0)d=0; printf \"%.2f\", d}")
-        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $anchor_pct - $pb_used_wh*100/$SL_PB_WH}")
+        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $anchor_pct - $pb_used_wh*100/$pb_cap}")
         pb_start_pct="$anchor_pct"
         local anchor_age=$(( NOW_TS - anchor_ts ))
         anchor_source=$(printf 'anchor %s%% set %s ago' "$anchor_pct" "$(fmt_dur "$anchor_age")")
       else
         pb_used_wh=$(awk "BEGIN{printf \"%.2f\", $ENERGY_WH*$UPS/$obs_dur}")
-        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $SL_PB_START_PCT - $pb_used_wh*100/$SL_PB_WH}")
+        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $SL_PB_START_PCT - $pb_used_wh*100/$pb_cap}")
         pb_start_pct="$SL_PB_START_PCT"
-        anchor_source=$(printf 'assuming %s%% at boot · set via: sl pb <current%%>' "$SL_PB_START_PCT")
+        anchor_source=$(printf 'assuming %s%% at boot · set via: sl pb <current%%> [bank_wh]' "$SL_PB_START_PCT")
       fi
       local pb_wh_left sec_left
-      pb_wh_left=$(awk "BEGIN{v=$SL_PB_WH*$pb_pct_left/100; if(v<0)v=0; printf \"%.1f\", v}")
+      pb_wh_left=$(awk "BEGIN{v=$pb_cap*$pb_pct_left/100; if(v<0)v=0; printf \"%.1f\", v}")
       sec_left=$(awk "BEGIN{w=$avg_w_obs+0; if(w<=0){print 0; exit}
         s=$pb_wh_left*3600/w; if(s<0)s=0; printf \"%.0f\", s}")
       local left_str; left_str=$(fmt_dur "$sec_left")
@@ -592,7 +597,8 @@ dash() {
         "$C_LBL" "$R" "$(bar $pb_bar_pct 14 "$pb_col")" \
         "$pb_col" "$pb_pct_left" "$R" "$pb_wh_left" \
         "$C_VAL" "$left_str" "$R"
-      printf '        %s%s · bank=%s Wh%s\n' "$C_DIM" "$anchor_source" "$SL_PB_WH" "$R"
+      printf '        %s%s · bank=%s Wh%s\n' "$C_DIM" "$anchor_source" "$pb_cap" "$R"
+      fi
     fi
   fi
 
@@ -792,26 +798,68 @@ case "$cmd" in
   raw)      safe_call "${2:-{\"get_status\":{}\}}" | jq . ;;
   pb)
     pct="${2:-}"
+    wh="${3:-}"
+    _pb_help() {
+      cat <<'EOF' >&2
+usage:
+  sl pb                      show current anchor
+  sl pb <pct> [wh]           anchor bank % now (and optional full-charge Wh)
+  sl pb -                    clear the anchor (alias: reset, clear, off)
+EOF
+    }
     if [[ -z "$pct" ]]; then
       if [[ -s "$SL_PB_ANCHOR" ]]; then
-        jq -r '"anchor: \(.pct)% at uptime \(.uptime)s, energyWh=\(.energyWh), boots=\(.boots), ts=\(.ts)"' "$SL_PB_ANCHOR"
+        jq -r --argjson now "$(date +%s)" '
+          def fmt(s): (s|tonumber) as $s
+            | if $s>=3600 then "\($s/3600|floor)h\(($s%3600)/60|floor)m"
+              elif $s>=60 then "\($s/60|floor)m\($s%60|floor)s"
+              else "\($s)s" end;
+          "anchor: \(.pct)% · bank=\(.wh // "—") Wh · set \(fmt($now - .ts)) ago (at dish uptime \(.uptime)s, boots=\(.boots), energyWh=\(.energyWh))"
+        ' "$SL_PB_ANCHOR"
       else
-        echo "no anchor set. run: sl pb <current_pct>"
+        echo "no anchor set."
+        _pb_help
       fi
       exit 0
     fi
+    case "$pct" in
+      -|reset|clear|off)
+        if [[ -s "$SL_PB_ANCHOR" ]]; then
+          rm -f "$SL_PB_ANCHOR"
+          echo "anchor cleared."
+        else
+          echo "no anchor to clear."
+        fi
+        exit 0
+        ;;
+      -h|--help|help)
+        _pb_help; exit 0 ;;
+    esac
     if ! [[ "$pct" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-      echo "usage: sl pb <pct 0-100>" >&2; exit 2
+      _pb_help; exit 2
+    fi
+    if [[ -n "$wh" ]] && ! [[ "$wh" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      _pb_help; exit 2
     fi
     # Refresh state (computes ENERGY_WH) by running a dash pass silently.
     dash >/dev/null 2>&1 || true
     if [[ ! -s "$SL_STATE" ]]; then
       echo "no state yet — is the dish reachable?" >&2; exit 1
     fi
-    jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
-      '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
-      "$SL_STATE" > "$SL_PB_ANCHOR"
-    jq -r '"anchored: \(.pct)% at uptime \(.uptime)s (energyWh=\(.energyWh), boots=\(.boots))"' "$SL_PB_ANCHOR"
+    # Preserve prior wh if not given this time.
+    prev_wh=""
+    [[ -s "$SL_PB_ANCHOR" ]] && prev_wh=$(jq -r '.wh // empty' "$SL_PB_ANCHOR" 2>/dev/null || true)
+    [[ -z "$wh" ]] && wh="$prev_wh"
+    if [[ -n "$wh" ]]; then
+      jq -c --argjson pct "$pct" --argjson wh "$wh" --argjson ts "$(date +%s)" \
+        '{pct:$pct, wh:$wh, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
+        "$SL_STATE" > "$SL_PB_ANCHOR"
+    else
+      jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
+        '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
+        "$SL_STATE" > "$SL_PB_ANCHOR"
+    fi
+    jq -r '"anchored: \(.pct)% · bank=\(.wh // "—") Wh (uptime \(.uptime)s, energyWh=\(.energyWh), boots=\(.boots))"' "$SL_PB_ANCHOR"
     ;;
-  *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|pb [pct]|raw '<json>']" >&2; exit 1 ;;
+  *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|pb [pct [wh] | -]|raw '<json>']" >&2; exit 1 ;;
 esac
