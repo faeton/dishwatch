@@ -41,6 +41,38 @@ func main() {
 		if err := runDash(ctx); err != nil {
 			die(err)
 		}
+	case "location", "loc":
+		if err := runLocation(ctx); err != nil {
+			die(err)
+		}
+	case "history":
+		if err := runHistory(ctx); err != nil {
+			die(err)
+		}
+	case "map":
+		if err := runMap(ctx); err != nil {
+			die(err)
+		}
+	case "reboot":
+		if err := runReboot(ctx); err != nil {
+			die(err)
+		}
+	case "raw":
+		req := ""
+		if len(os.Args) > 2 {
+			req = os.Args[2]
+		}
+		if err := runRaw(ctx, req); err != nil {
+			die(err)
+		}
+	case "speed", "speedtest":
+		if err := runSpeed(ctx); err != nil {
+			die(err)
+		}
+	case "pb":
+		if err := runPb(ctx, os.Args[2:]); err != nil {
+			die(err)
+		}
 	case "events", "ev":
 		n := 40
 		if len(os.Args) > 2 {
@@ -71,7 +103,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]]")
+	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|history|location|loc|map|reboot|raw '<json>'|speed|pb [pct [wh] | -]]")
 	fmt.Fprintln(os.Stderr, "       (more commands coming — bash `sl` still has the full set)")
 }
 

@@ -94,8 +94,9 @@ func runWatch(ctx context.Context, every int) error {
 				doneCh <- err
 				return
 			}
+			loc, _ := c.GetLocation(ctx)
 			L := ui.DetectLayout()
-			renderDash(ui.EOLPadWriter{W: &buf}, s, h, L, true)
+			renderDash(ui.EOLPadWriter{W: &buf}, s, h, loc, L, true)
 			doneCh <- nil
 		}()
 

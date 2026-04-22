@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/faeton/dishwatch/internal/dish"
+	"github.com/faeton/dishwatch/internal/geo"
 	"github.com/faeton/dishwatch/internal/state"
 	"github.com/faeton/dishwatch/internal/ui"
 )
@@ -28,8 +29,9 @@ func runDash(ctx context.Context) error {
 		_ = state.MarkUnreachable(envOr("STARLINK_DISH", "192.168.100.1:9200"))
 		return renderUnreachable(os.Stdout, false, err)
 	}
+	loc, _ := c.GetLocation(ctx)
 	L := ui.DetectLayout()
-	renderDash(os.Stdout, s, h, L, false)
+	renderDash(os.Stdout, s, h, loc, L, false)
 	return nil
 }
 
@@ -202,7 +204,7 @@ func renderUnreachable(w io.Writer, inWatch bool, err error) error {
 	return nil
 }
 
-func renderDash(w io.Writer, s *dish.Status, h *dish.History, L ui.Layout, inWatch bool) {
+func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location, L ui.Layout, inWatch bool) {
 	// In watch mode the caller positions the cursor at (0,0) and pads lines
 	// to the right edge themselves, so we skip the clear.
 	if !inWatch {
@@ -362,8 +364,20 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, L ui.Layout, inWat
 	Lcol = append(Lcol, sec("⌖", "Location"))
 	Rcol = append(Rcol, sec("⎈", "Link"))
 
-	Lcol = append(Lcol, fmt.Sprintf("%sCountry %s %s%s%s",
-		ui.Lbl, ui.Rst, ui.Val, dashIf(s.DeviceInfo.CountryCode), ui.Rst))
+	if loc != nil {
+		place, _ := geo.Reverse(context.Background(), loc.LLA.Lat, loc.LLA.Lon)
+		if place == "" || place == "unknown" {
+			place = dashIf(s.DeviceInfo.CountryCode)
+		}
+		Lcol = append(Lcol, fmt.Sprintf("%sPlace   %s %s%s%s",
+			ui.Lbl, ui.Rst, ui.Val, place, ui.Rst))
+		Lcol = append(Lcol, fmt.Sprintf("%sCoords  %s %s%.4f, %.4f%s  %salt %.0fm%s",
+			ui.Lbl, ui.Rst, ui.Val, loc.LLA.Lat, loc.LLA.Lon, ui.Rst,
+			ui.Dim, loc.LLA.Alt, ui.Rst))
+	} else {
+		Lcol = append(Lcol, fmt.Sprintf("%sCountry %s %s%s%s",
+			ui.Lbl, ui.Rst, ui.Val, dashIf(s.DeviceInfo.CountryCode), ui.Rst))
+	}
 	gpsColor := ui.OK
 	gpsMark := "✓"
 	if !s.GpsStats.GpsValid {
