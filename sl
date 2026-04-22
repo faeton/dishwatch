@@ -25,6 +25,21 @@ unset _bin
 
 call() { grpcurl -plaintext -max-time 4 -d "$1" "$DISH" "$SVC"; }
 
+# Humanize a duration in seconds as "1d 2h 3m 4s" (skip zero leading units).
+_sl_humanize_dur() {
+  local s=$1 d h m
+  (( s < 0 )) && s=0
+  d=$(( s / 86400 )); s=$(( s % 86400 ))
+  h=$(( s / 3600 ));  s=$(( s % 3600 ))
+  m=$(( s / 60 ));    s=$(( s % 60 ))
+  local out=""
+  (( d > 0 )) && out+="${d}d "
+  (( h > 0 || ${#out} > 0 )) && out+="${h}h "
+  (( m > 0 || ${#out} > 0 )) && out+="${m}m "
+  out+="${s}s"
+  printf '%s' "$out"
+}
+
 # Friendly unreachable message for commands that don't have their own handling.
 _sl_die_unreachable() {
   printf '\e[38;5;174mdish unreachable\e[0m at %s\n' "$DISH" >&2
@@ -35,7 +50,7 @@ _sl_die_unreachable() {
     local ts age
     ts=$(jq -r .ts "$SL_STATE" 2>/dev/null || echo 0)
     age=$(( $(date +%s) - ts ))
-    printf '  · last seen %ss ago — run \x1b[38;5;253msl dash\x1b[0m for frozen snapshot + events\n' "$age" >&2
+    printf '  · last seen %s ago — run \x1b[38;5;253msl dash\x1b[0m for frozen snapshot + events\n' "$(_sl_humanize_dur "$age")" >&2
   fi
   _sl_mark_unreachable 2>/dev/null || true
   exit 1
@@ -81,10 +96,11 @@ _sl_diff_and_log() {
     fi
     # Gap = we were away. Attribute cause.
     if (( gap > 30 )); then
+      local ghuman; ghuman=$(_sl_humanize_dur "$gap")
       if [[ "$cb" != "$pb" ]]; then
-        _sl_log "GAP"  "${gap}s unseen — dish rebooted during gap"
+        _sl_log "GAP"  "${ghuman} unseen — dish rebooted during gap"
       else
-        _sl_log "GAP"  "${gap}s unseen — dish stayed up (local/Wi-Fi side)"
+        _sl_log "GAP"  "${ghuman} unseen — dish stayed up (local/Wi-Fi side)"
       fi
     fi
     [[ "$cs" != "$ps" ]] && _sl_log "STATE"  "$ps → $cs"
