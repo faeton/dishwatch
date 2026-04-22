@@ -7,21 +7,25 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/faeton/dishwatch/internal/dish"
+	"github.com/faeton/dishwatch/internal/state"
 	"github.com/faeton/dishwatch/internal/ui"
 )
 
 func runDash(ctx context.Context) error {
 	c, err := dialDish(ctx)
 	if err != nil {
+		_ = state.MarkUnreachable(envOr("STARLINK_DISH", "192.168.100.1:9200"))
 		return renderUnreachable(os.Stdout, false, err)
 	}
 	defer c.Close()
 
 	s, h, err := fetchDash(ctx, c)
 	if err != nil {
+		_ = state.MarkUnreachable(envOr("STARLINK_DISH", "192.168.100.1:9200"))
 		return renderUnreachable(os.Stdout, false, err)
 	}
 	L := ui.DetectLayout()
@@ -49,7 +53,124 @@ func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History
 	if sr.err != nil {
 		return nil, nil, sr.err
 	}
+	snapshotAndLog(sr.s, hr.h)
 	return sr.s, hr.h, nil
+}
+
+// snapshotAndLog compares the new snapshot against the persisted one, updates
+// the energy accumulator from get_history.powerIn, writes transition events,
+// then replaces state.json.
+func snapshotAndLog(s *dish.Status, h *dish.History) {
+	prev, _ := state.Load()
+	now := time.Now().Unix()
+	cur := &state.Snapshot{
+		TS:       now,
+		Boots:    int(s.DeviceInfo.Bootcount),
+		UptimeS:  s.DeviceState.UptimeS,
+		State:    derivedState(s),
+		Disable:  s.DisablementCode,
+		Alerts:   joinActiveAlerts(s.Alerts),
+		ReadyAll: strconv.FormatBool(allTrue(s.ReadyStates)),
+		Ping:     s.PopPingLatencyMs,
+		Drop:     s.PopPingDropRate,
+	}
+	cur.EnergyWh, cur.LastCurrent, cur.ObsStartTs, cur.ObsStartUptime =
+		integrateEnergy(s, h, prev, now)
+	_ = state.DiffAndLog(cur, prev)
+	_ = state.Save(cur)
+}
+
+// integrateEnergy advances the Wh accumulator based on the powerIn ring in
+// get_history.
+//
+//   - powerIn[i] is watts at sample i (1 Hz ring). Summing N samples yields
+//     N watt-seconds = N joules; divide by 3600 for Wh.
+//   - `current` is a monotonic write cursor. We dedupe by (current - lastCurrent)
+//     so each call integrates only the samples it hasn't already seen.
+//   - On reboot (bootcount change OR uptime went backwards), we reset and
+//     bootstrap from the ring — consuming last min(uptime, ringLen) samples.
+func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now int64) (energyWh float64, lastCur, obsStartTs, obsStartUp int64) {
+	uptime := s.DeviceState.UptimeS
+	boots := int(s.DeviceInfo.Bootcount)
+
+	var prevBoots int = -1
+	var prevUptime int64 = -1
+	if prev != nil {
+		prevBoots = prev.Boots
+		prevUptime = prev.UptimeS
+		energyWh = prev.EnergyWh
+		lastCur = prev.LastCurrent
+		obsStartTs = prev.ObsStartTs
+		obsStartUp = prev.ObsStartUptime
+	}
+
+	reboot := prev == nil || boots != prevBoots || (prevUptime >= 0 && uptime < prevUptime)
+
+	if h != nil && len(h.PowerIn) > 0 && h.Current > 0 {
+		ringLen := int64(len(h.PowerIn))
+		cur := h.Current
+		if reboot {
+			nb := uptime
+			if nb > ringLen {
+				nb = ringLen
+			}
+			if nb > cur {
+				nb = cur
+			}
+			var joules float64
+			if nb > 0 {
+				for i := cur - nb; i < cur; i++ {
+					joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
+				}
+			}
+			energyWh = joules / 3600
+			obsStartTs = now - nb
+			obsStartUp = uptime - nb
+			if obsStartUp < 0 {
+				obsStartUp = 0
+			}
+			lastCur = cur
+		} else if lastCur > 0 {
+			delta := cur - lastCur
+			if delta > 0 && delta <= ringLen {
+				var joules float64
+				for i := cur - delta; i < cur; i++ {
+					joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
+				}
+				energyWh += joules / 3600
+				lastCur = cur
+			} else if delta > ringLen {
+				// Gap bigger than the ring — samples lost, keep accumulator.
+				lastCur = cur
+			}
+		} else {
+			// First observation without a reboot and without a prior cursor.
+			lastCur = cur
+			if obsStartTs == 0 {
+				obsStartTs = now
+			}
+			if obsStartUp == 0 {
+				obsStartUp = uptime
+			}
+		}
+	}
+	if obsStartTs == 0 {
+		obsStartTs = now
+	}
+	return
+}
+
+func derivedState(s *dish.Status) string {
+	if s.DisablementCode != "" && s.DisablementCode != "OKAY" {
+		return "DISABLED"
+	}
+	if allTrue(s.ReadyStates) {
+		return "CONNECTED"
+	}
+	if s.State != "" {
+		return s.State
+	}
+	return "NOT READY"
 }
 
 func renderUnreachable(w io.Writer, inWatch bool, err error) error {
@@ -57,9 +178,27 @@ func renderUnreachable(w io.Writer, inWatch bool, err error) error {
 		fmt.Fprint(w, "\x1b[H\x1b[J")
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  %sStarlink%s  %s● UNREACHABLE%s\n",
-		ui.Hdr, ui.Rst, ui.Err, ui.Rst)
-	fmt.Fprintf(w, "  %s%v%s\n", ui.Dim, err, ui.Rst)
+	addr := envOr("STARLINK_DISH", "192.168.100.1:9200")
+	fmt.Fprintf(w, "  %sStarlink%s  %s● UNREACHABLE%s  %s%s%s\n",
+		ui.Hdr, ui.Rst, ui.Err, ui.Rst, ui.Dim, addr, ui.Rst)
+	fmt.Fprintf(w, "  %sapi did not answer — could be local Wi-Fi, ethernet, or the dish rebooting%s\n\n",
+		ui.Dim, ui.Rst)
+
+	if snap, _ := state.Load(); snap != nil {
+		age := time.Now().Unix() - snap.TS
+		fmt.Fprintf(w, "  %sLast seen%s   %s%s ago%s  %sstate=%s  disable=%s  ping=%.1fms  boots=%d  up=%ds%s\n",
+			ui.Lbl, ui.Rst, ui.Val, state.HumanDur(age), ui.Rst,
+			ui.Dim, snap.State, snap.Disable, snap.Ping, snap.Boots, snap.UptimeS, ui.Rst)
+	}
+
+	if lines, _ := state.TailEvents(10); len(lines) > 0 {
+		fmt.Fprintf(w, "\n  %sRecent events (last %d):%s\n", ui.Hdr, len(lines), ui.Rst)
+		for _, l := range lines {
+			fmt.Fprintf(w, "  %s%s%s\n", ui.Dim, l, ui.Rst)
+		}
+	}
+	fmt.Fprintf(w, "\n%s  %s · %s%s\n", ui.Dim, addr, time.Now().Format("15:04:05"), ui.Rst)
+	_ = err
 	return nil
 }
 
@@ -316,7 +455,39 @@ func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 		fmt.Fprintf(w, "  %sPower %s%s%s  %snow %.1f W  avg %.1f W  max %.1f W%s\n",
 			ui.Lbl, ui.Warn, ui.Spark(pw, 0), ui.Rst, ui.Dim, pwNow, pwAvg, pwMax, ui.Rst)
 	}
+	renderEnergy(w, L)
 }
+
+// renderEnergy writes the Energy (and optional Bank) lines, derived from
+// the persisted snapshot's accumulator.
+func renderEnergy(w io.Writer, L ui.Layout) {
+	snap, err := state.Load()
+	if err != nil || snap == nil || snap.EnergyWh <= 0 {
+		return
+	}
+	now := time.Now().Unix()
+	obsDur := now - snap.ObsStartTs
+	if obsDur < 1 {
+		obsDur = 1
+	}
+	avgW := snap.EnergyWh * 3600 / float64(obsDur)
+	estWh := snap.EnergyWh * float64(snap.UptimeS) / float64(obsDur)
+	obsStr := state.HumanDur(obsDur)
+	upStr := state.HumanDur(snap.UptimeS)
+
+	if obsDur*100 >= snap.UptimeS*95 {
+		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %ssince boot (%s) · avg %.1f W%s\n",
+			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, upStr, avgW, ui.Rst)
+	} else {
+		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %sobs %s @ %.1f W · est %.1f Wh over %s%s\n",
+			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, obsStr, avgW, estWh, upStr, ui.Rst)
+	}
+	renderBank(w, L, snap, avgW)
+}
+
+// renderBank draws the power-bank depletion line if an anchor or env override
+// is set. Implemented fully in pb.go (this is a stub satisfied at link time).
+var renderBank = func(w io.Writer, L ui.Layout, snap *state.Snapshot, avgW float64) {}
 
 // ----- helpers -----
 

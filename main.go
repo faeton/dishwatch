@@ -41,6 +41,16 @@ func main() {
 		if err := runDash(ctx); err != nil {
 			die(err)
 		}
+	case "events", "ev":
+		n := 40
+		if len(os.Args) > 2 {
+			if v, err := parsePositiveInt(os.Args[2]); err == nil {
+				n = v
+			}
+		}
+		if err := runEvents(ctx, n); err != nil {
+			die(err)
+		}
 	case "watch", "w":
 		every := 3
 		if len(os.Args) > 2 {
@@ -61,7 +71,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]]")
+	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]]")
 	fmt.Fprintln(os.Stderr, "       (more commands coming — bash `sl` still has the full set)")
 }
 
