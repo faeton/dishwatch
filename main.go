@@ -25,6 +25,10 @@ func main() {
 		if err := runStatus(ctx); err != nil {
 			die(err)
 		}
+	case "dash", "d":
+		if err := runDash(ctx); err != nil {
+			die(err)
+		}
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -35,7 +39,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: sl [status]")
+	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d]")
 	fmt.Fprintln(os.Stderr, "       (more commands coming — bash `sl` still has the full set)")
 }
 

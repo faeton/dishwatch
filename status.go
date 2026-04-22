@@ -38,10 +38,10 @@ func runStatus(ctx context.Context) error {
 	fmt.Printf("State:        %s\n", state)
 	fmt.Printf("Uptime:       %.1f h  (%ds, boots=%d)\n", float64(uptime)/3600, uptime, s.DeviceInfo.Bootcount)
 	fmt.Printf("Hardware:     %s   class=%s   mobility=%s   country=%s\n",
-		s.DeviceInfo.HardwareVersion, dashIfEmpty(s.ClassOfService),
-		dashIfEmpty(s.MobilityClass), dashIfEmpty(s.DeviceInfo.CountryCode))
+		s.DeviceInfo.HardwareVersion, dashIf(s.ClassOfService),
+		dashIf(s.MobilityClass), dashIf(s.DeviceInfo.CountryCode))
 	fmt.Printf("Software:     %s   swupdate=%s\n",
-		s.DeviceInfo.SoftwareVersion, dashIfEmpty(s.SoftwareUpdateState))
+		s.DeviceInfo.SoftwareVersion, dashIf(s.SoftwareUpdateState))
 	fmt.Printf("Throughput:   down %.2f Mbps   up %.2f Mbps\n", downMbps, upMbps)
 	fmt.Printf("Ping (pop):   %.1f ms   drop=%.1f%%\n", s.PopPingLatencyMs, dropPct)
 	fmt.Printf("SNR:          aboveNoise=%t   persistentlyLow=%t\n",
@@ -50,13 +50,13 @@ func runStatus(ctx context.Context) error {
 		obsPct, s.ObstructionStats.ValidS, timeObsPct, s.ObstructionStats.PatchesValid)
 	fmt.Printf("Aim:          az=%.1f deg   el=%.1f deg   tilt=%.1f deg   attitude=%s\n",
 		s.BoresightAzimuthDeg, s.BoresightElevationDeg,
-		s.AlignmentStats.TiltAngleDeg, dashIfEmpty(s.AlignmentStats.AttitudeEstimationState))
+		s.AlignmentStats.TiltAngleDeg, dashIf(s.AlignmentStats.AttitudeEstimationState))
 	fmt.Printf("GPS:          valid=%t   sats=%d\n", s.GpsStats.GpsValid, s.GpsStats.GpsSats)
 	fmt.Printf("Ethernet:     %d Mbps\n", s.EthSpeedMbps)
 	fmt.Printf("Ready:        %s\n", joinMap(s.ReadyStates))
 	fmt.Printf("Bandwidth:    dl=%s   ul=%s   disablement=%s\n",
-		dashIfEmpty(s.DlBandwidthRestricted), dashIfEmpty(s.UlBandwidthRestricted),
-		dashIfEmpty(s.DisablementCode))
+		dashIf(s.DlBandwidthRestricted), dashIf(s.UlBandwidthRestricted),
+		dashIf(s.DisablementCode))
 	fmt.Printf("Alerts:       %s\n", joinActiveAlerts(s.Alerts))
 	return nil
 }
@@ -100,9 +100,3 @@ func joinActiveAlerts(m map[string]bool) string {
 	return strings.Join(active, ", ")
 }
 
-func dashIfEmpty(s string) string {
-	if s == "" {
-		return "?"
-	}
-	return s
-}
