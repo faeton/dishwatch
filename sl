@@ -7,6 +7,11 @@ SVC="SpaceX.API.Device.Device/Handle"
 SL_CACHE="$HOME/.cache/sl"
 SL_STATE="$SL_CACHE/state.json"
 SL_EVENTS="$SL_CACHE/events.log"
+SL_PB_ANCHOR="$SL_CACHE/pb.json"
+# Power-bank model. Wh = dish-input energy per full 100% charge (calibrated
+# via bank-% vs integrated Wh). Override with env vars.
+SL_PB_WH="${SL_PB_WH:-67}"
+SL_PB_START_PCT="${SL_PB_START_PCT:-100}"
 mkdir -p "$SL_CACHE"
 
 for _bin in grpcurl jq; do
@@ -228,12 +233,93 @@ dash() {
 
   local alerts_color=$C_OK; [[ "$ALERTS" != "none" ]] && alerts_color=$C_ERR
 
+  # ---------- power + energy since boot ----------
+  # One get_history call serves PW_NOW, the energy accumulator, and the
+  # sparklines below. powerIn[i] is watts at sample i (1 Hz ring, ~60 samples).
+  # .current is a monotonic write cursor; we dedupe by last-seen cursor so each
+  # watch tick integrates only the samples it hasn't seen.
+  local HIST_JSON="" CUR_IDX=0 HIST_LEN=0 PW_NOW=""
+  HIST_JSON=$(call '{"get_history":{}}' 2>/dev/null || true)
+  if [[ -n "$HIST_JSON" ]] && echo "$HIST_JSON" | jq -e '.dishGetHistory.powerIn' >/dev/null 2>&1; then
+    eval "$(echo "$HIST_JSON" | jq -r '
+      .dishGetHistory as $h |
+      @sh "CUR_IDX=\($h.current | tonumber)",
+      @sh "HIST_LEN=\($h.powerIn | length)"')"
+    if (( HIST_LEN > 0 && CUR_IDX > 0 )); then
+      PW_NOW=$(echo "$HIST_JSON" | jq -r --argjson cur "$CUR_IDX" --argjson len "$HIST_LEN" '
+        .dishGetHistory.powerIn as $p |
+        $p[((($cur - 1) % $len) + $len) % $len] // empty')
+    fi
+  fi
+
+  local NOW_TS; NOW_TS=$(date +%s)
+  local PREV_BOOTS="" PREV_UPS="" PREV_ENERGY=0 PREV_LAST_CUR="" PREV_OBS_TS="" PREV_OBS_UP=""
+  if [[ -s "$SL_STATE" ]]; then
+    eval "$(jq -r '
+      @sh "PREV_BOOTS=\(.boots // "")",
+      @sh "PREV_UPS=\(.uptimeS // "")",
+      @sh "PREV_ENERGY=\(.energyWh // 0)",
+      @sh "PREV_LAST_CUR=\(.lastCurrent // "")",
+      @sh "PREV_OBS_TS=\(.obsStartTs // "")",
+      @sh "PREV_OBS_UP=\(.obsStartUptime // "")"' "$SL_STATE" 2>/dev/null || true)"
+  fi
+
+  local ENERGY_WH="$PREV_ENERGY" LAST_CUR="$PREV_LAST_CUR"
+  local OBS_START_TS="$PREV_OBS_TS" OBS_START_UP="$PREV_OBS_UP"
+  local reboot=0
+  if [[ -z "$PREV_BOOTS" ]]; then reboot=1
+  elif [[ "$BOOTS" != "$PREV_BOOTS" ]]; then reboot=1
+  elif [[ -n "$PREV_UPS" ]] && (( UPS < PREV_UPS )); then reboot=1
+  fi
+
+  if (( HIST_LEN > 0 )); then
+    if (( reboot == 1 )); then
+      # Bootstrap from ring: consume last min(uptime, HIST_LEN) samples.
+      local nb=$UPS
+      (( nb > HIST_LEN )) && nb=$HIST_LEN
+      (( nb > CUR_IDX )) && nb=$CUR_IDX
+      local boot_j=0
+      if (( nb > 0 )); then
+        boot_j=$(echo "$HIST_JSON" | jq -r --argjson cur "$CUR_IDX" --argjson len "$HIST_LEN" --argjson n "$nb" '
+          .dishGetHistory.powerIn as $p |
+          [ range($cur - $n; $cur) | $p[((. % $len) + $len) % $len] | select(type=="number") ] | add // 0')
+      fi
+      ENERGY_WH=$(awk "BEGIN{printf \"%.4f\", ($boot_j)/3600}")
+      OBS_START_TS=$(( NOW_TS - nb ))
+      OBS_START_UP=$(( UPS - nb )); (( OBS_START_UP < 0 )) && OBS_START_UP=0
+      LAST_CUR=$CUR_IDX
+    elif [[ -n "$LAST_CUR" ]]; then
+      local delta=$(( CUR_IDX - LAST_CUR ))
+      if (( delta > 0 && delta <= HIST_LEN )); then
+        local add_j=0
+        add_j=$(echo "$HIST_JSON" | jq -r --argjson cur "$CUR_IDX" --argjson len "$HIST_LEN" --argjson d "$delta" '
+          .dishGetHistory.powerIn as $p |
+          [ range($cur - $d; $cur) | $p[((. % $len) + $len) % $len] | select(type=="number") ] | add // 0')
+        ENERGY_WH=$(awk "BEGIN{printf \"%.4f\", $ENERGY_WH + ($add_j)/3600}")
+        LAST_CUR=$CUR_IDX
+      elif (( delta > HIST_LEN )); then
+        # Gap longer than the ring — lost samples; keep accumulator, skip ahead.
+        LAST_CUR=$CUR_IDX
+      fi
+    else
+      LAST_CUR=$CUR_IDX
+      [[ -z "$OBS_START_TS" ]] && OBS_START_TS=$NOW_TS
+      [[ -z "$OBS_START_UP" ]] && OBS_START_UP=$UPS
+    fi
+  fi
+  [[ -z "$ENERGY_WH" ]] && ENERGY_WH=0
+  [[ -z "$OBS_START_TS" ]] && OBS_START_TS=$NOW_TS
+  [[ -z "$OBS_START_UP" ]] && OBS_START_UP=$UPS
+  [[ -z "$LAST_CUR" ]] && LAST_CUR=0
+
   # Snapshot + log transitions
   local snap; snap=$(jq -cn \
-    --argjson ts "$(date +%s)" --argjson boots "$BOOTS" --argjson uptimeS "$UPS" \
+    --argjson ts "$NOW_TS" --argjson boots "$BOOTS" --argjson uptimeS "$UPS" \
     --arg state "$STATE" --arg disable "$DISABLE" --arg alerts "$ALERTS" \
     --arg ready_all "$READY_ALL" --argjson ping "$PING" --argjson drop "$DROP" \
-    '{ts:$ts, boots:($boots|tonumber), uptimeS:($uptimeS|tonumber), state:$state, disable:$disable, alerts:$alerts, ready_all:$ready_all, ping:$ping, drop:$drop}')
+    --argjson energyWh "$ENERGY_WH" --argjson lastCurrent "$LAST_CUR" \
+    --argjson obsStartTs "$OBS_START_TS" --argjson obsStartUptime "$OBS_START_UP" \
+    '{ts:$ts, boots:($boots|tonumber), uptimeS:($uptimeS|tonumber), state:$state, disable:$disable, alerts:$alerts, ready_all:$ready_all, ping:$ping, drop:$drop, energyWh:$energyWh, lastCurrent:$lastCurrent, obsStartTs:$obsStartTs, obsStartUptime:$obsStartUptime}')
   _sl_diff_and_log "$snap" || true
 
   # ---------- header ----------
@@ -343,13 +429,8 @@ dash() {
     INVALID_HARDWARE_VERSION) svc_str="firmware invalid";  svc_col=$C_ERR ;;
     *)                      svc_str="$DISABLE";            svc_col=$C_WARN ;;
   esac
-  # Current power draw (Mini exposes it only via get_history.powerIn ring)
-  local PW_NOW=""
-  PW_NOW=$(call '{"get_history":{}}' 2>/dev/null | jq -r '
-    .dishGetHistory as $h |
-    ($h.current | tonumber) as $cur |
-    ($h.powerIn | length) as $len |
-    if $len > 0 then $h.powerIn[(($cur - 1) % $len)] else empty end' 2>/dev/null || true)
+  # Current power draw (Mini exposes it only via get_history.powerIn ring).
+  # PW_NOW was extracted from HIST_JSON earlier alongside the energy accumulator.
   local pw_col=$C_OK
   if [[ -n "$PW_NOW" ]]; then
     awk "BEGIN{exit !($PW_NOW >= 25)}" && pw_col=$C_WARN
@@ -371,7 +452,8 @@ dash() {
   done
 
   # ---------- history sparklines (last 60s) ----------
-  local hist; hist=$(call '{"get_history":{}}' 2>/dev/null || echo '{}')
+  local hist="$HIST_JSON"
+  [[ -z "$hist" ]] && hist='{}'
   if [[ -n "$hist" ]] && echo "$hist" | jq -e '.dishGetHistory' >/dev/null 2>&1; then
     # jq emits: 4 lines, each space-separated numbers (last 60 samples, oldest→newest)
     local data; data=$(echo "$hist" | jq -r '
@@ -447,6 +529,70 @@ dash() {
       }')"
       printf '  %sPower %s%s%s  %snow %s W  avg %s W  max %s W%s\n' \
         "$C_LBL" "$C_WARN" "$(spark "$pw" "")" "$R" "$C_DIM" "$pw_now" "$pw_avg" "$pw_max" "$R"
+    fi
+    # ---------- energy since boot (integrated from powerIn) ----------
+    if awk "BEGIN{exit !(${ENERGY_WH:-0} > 0)}"; then
+      local obs_dur=$(( NOW_TS - OBS_START_TS ))
+      (( obs_dur < 1 )) && obs_dur=1
+      local energy_fmt avg_w_obs est_wh
+      energy_fmt=$(awk "BEGIN{printf \"%.2f\", $ENERGY_WH}")
+      avg_w_obs=$(awk "BEGIN{printf \"%.1f\", $ENERGY_WH*3600/$obs_dur}")
+      est_wh=$(awk "BEGIN{printf \"%.1f\", $ENERGY_WH*$UPS/$obs_dur}")
+      local fmt_dur
+      fmt_dur() { awk -v s="$1" 'BEGIN{h=int(s/3600); m=int((s%3600)/60); sec=int(s%60);
+        if(h>0) printf "%dh%02dm",h,m; else if(m>0) printf "%dm%02ds",m,sec; else printf "%ds",sec}'; }
+      local obs_str up_str
+      obs_str=$(fmt_dur "$obs_dur")
+      up_str=$(fmt_dur "$UPS")
+      if (( obs_dur * 100 >= UPS * 95 )); then
+        printf '  %sEnergy%s %s%s Wh%s  %ssince boot (%s) · avg %s W%s\n' \
+          "$C_LBL" "$R" "$C_VAL" "$energy_fmt" "$R" "$C_DIM" "$up_str" "$avg_w_obs" "$R"
+      else
+        printf '  %sEnergy%s %s%s Wh%s  %sobs %s @ %s W · est %s Wh over %s%s\n' \
+          "$C_LBL" "$R" "$C_VAL" "$energy_fmt" "$R" "$C_DIM" "$obs_str" "$avg_w_obs" "$est_wh" "$up_str" "$R"
+      fi
+
+      # ---------- power-bank depletion estimate ----------
+      # Prefer an explicit anchor (set via `sl pb <pct>`): depletion counted
+      # directly from integrated Wh since anchor — no extrapolation. If the
+      # anchor's bootcount doesn't match the current boot, it's stale.
+      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_boots="" anchor_source=""
+      if [[ -s "$SL_PB_ANCHOR" ]]; then
+        eval "$(jq -r '
+          @sh "anchor_pct=\(.pct // "")",
+          @sh "anchor_energy=\(.energyWh // "")",
+          @sh "anchor_ts=\(.ts // "")",
+          @sh "anchor_boots=\(.boots // "")"' "$SL_PB_ANCHOR" 2>/dev/null || true)"
+      fi
+      local pb_pct_left pb_used_wh pb_start_pct
+      if [[ -n "$anchor_boots" && "$anchor_boots" == "$BOOTS" && -n "$anchor_energy" && -n "$anchor_pct" ]]; then
+        pb_used_wh=$(awk "BEGIN{d=$ENERGY_WH-$anchor_energy; if(d<0)d=0; printf \"%.2f\", d}")
+        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $anchor_pct - $pb_used_wh*100/$SL_PB_WH}")
+        pb_start_pct="$anchor_pct"
+        local anchor_age=$(( NOW_TS - anchor_ts ))
+        anchor_source=$(printf 'anchor %s%% set %s ago' "$anchor_pct" "$(fmt_dur "$anchor_age")")
+      else
+        pb_used_wh=$(awk "BEGIN{printf \"%.2f\", $ENERGY_WH*$UPS/$obs_dur}")
+        pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $SL_PB_START_PCT - $pb_used_wh*100/$SL_PB_WH}")
+        pb_start_pct="$SL_PB_START_PCT"
+        anchor_source=$(printf 'assuming %s%% at boot · set via: sl pb <current%%>' "$SL_PB_START_PCT")
+      fi
+      local pb_wh_left sec_left
+      pb_wh_left=$(awk "BEGIN{v=$SL_PB_WH*$pb_pct_left/100; if(v<0)v=0; printf \"%.1f\", v}")
+      sec_left=$(awk "BEGIN{w=$avg_w_obs+0; if(w<=0){print 0; exit}
+        s=$pb_wh_left*3600/w; if(s<0)s=0; printf \"%.0f\", s}")
+      local left_str; left_str=$(fmt_dur "$sec_left")
+      local pb_col=$C_OK
+      awk "BEGIN{exit !($pb_pct_left < 50)}" && pb_col=$C_WARN
+      awk "BEGIN{exit !($pb_pct_left < 20)}" && pb_col=$C_ERR
+      local pb_bar_pct=${pb_pct_left%.*}
+      (( pb_bar_pct < 0 )) && pb_bar_pct=0
+      (( pb_bar_pct > 100 )) && pb_bar_pct=100
+      printf '  %sBank  %s %s  %s%s%%%s left · %s Wh · %sdies in %s%s\n' \
+        "$C_LBL" "$R" "$(bar $pb_bar_pct 14 "$pb_col")" \
+        "$pb_col" "$pb_pct_left" "$R" "$pb_wh_left" \
+        "$C_VAL" "$left_str" "$R"
+      printf '        %s%s · bank=%s Wh%s\n' "$C_DIM" "$anchor_source" "$SL_PB_WH" "$R"
     fi
   fi
 
@@ -644,5 +790,28 @@ case "$cmd" in
   map)      safe_call '{"dish_get_obstruction_map":{}}' | jq '.dishGetObstructionMap | {numRows, numCols, snrCells: (.snr|length)}' ;;
   reboot)   safe_call '{"reboot":{}}' ;;
   raw)      safe_call "${2:-{\"get_status\":{}\}}" | jq . ;;
-  *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|raw '<json>']" >&2; exit 1 ;;
+  pb)
+    pct="${2:-}"
+    if [[ -z "$pct" ]]; then
+      if [[ -s "$SL_PB_ANCHOR" ]]; then
+        jq -r '"anchor: \(.pct)% at uptime \(.uptime)s, energyWh=\(.energyWh), boots=\(.boots), ts=\(.ts)"' "$SL_PB_ANCHOR"
+      else
+        echo "no anchor set. run: sl pb <current_pct>"
+      fi
+      exit 0
+    fi
+    if ! [[ "$pct" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      echo "usage: sl pb <pct 0-100>" >&2; exit 2
+    fi
+    # Refresh state (computes ENERGY_WH) by running a dash pass silently.
+    dash >/dev/null 2>&1 || true
+    if [[ ! -s "$SL_STATE" ]]; then
+      echo "no state yet — is the dish reachable?" >&2; exit 1
+    fi
+    jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
+      '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
+      "$SL_STATE" > "$SL_PB_ANCHOR"
+    jq -r '"anchored: \(.pct)% at uptime \(.uptime)s (energyWh=\(.energyWh), boots=\(.boots))"' "$SL_PB_ANCHOR"
+    ;;
+  *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|pb [pct]|raw '<json>']" >&2; exit 1 ;;
 esac
