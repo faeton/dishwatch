@@ -11,12 +11,13 @@ Other generations probably work but some fields may differ.
 ## Install
 
 ```sh
-brew install grpcurl jq
-git clone https://github.com/<you>/dishwatch.git
-ln -s "$PWD/dishwatch/sl" ~/.local/bin/sl   # or copy it
+brew tap faeton/tap
+brew install dishwatch
 ```
 
-Make sure your Mac is on the Starlink network (`192.168.100.1` must be reachable).
+Installs two binaries: `dishwatch` (canonical) and `sl` (shorthand symlink, all
+docs/examples below use `sl`). Make sure your Mac is on the Starlink network
+(`192.168.100.1` must be reachable).
 
 ## Usage
 
@@ -126,11 +127,40 @@ These are genuine dish/firmware limitations, not missing features:
 
 ## Files
 
-- `sl` — the whole tool. ~800 lines of bash, depends only on `grpcurl` and `jq`.
 - `~/.cache/sl/state.json` — last successful snapshot (includes energy accumulator)
 - `~/.cache/sl/pb.json` — power-bank anchor (if set via `sl pb <pct>`)
 - `~/.cache/sl/events.log` — append-only transition log (auto-trimmed to 2000 lines)
 - `~/.cache/sl/geo_<lat>_<lon>.txt` — cached Nominatim lookups
+
+## Releasing
+
+Releases are cut locally with [GoReleaser](https://goreleaser.com) and published
+to GitHub + the [`faeton/homebrew-tap`](https://github.com/faeton/homebrew-tap)
+repo in one step.
+
+```sh
+# prereqs (one-time)
+brew install goreleaser
+gh auth login                       # needs repo write scope
+
+# cut a release
+git tag v0.1.2                      # bump per semver
+git push --tags
+make publish                        # builds, uploads, pushes formula
+
+# local dry-run (no push, artifacts into dist/)
+make publish-dry
+```
+
+`make publish` runs `goreleaser release --clean` with `GITHUB_TOKEN=$(gh auth token)`.
+It builds darwin/linux × amd64/arm64 (~5 MB gzipped each), uploads tarballs to a
+new GitHub Release on `faeton/dishwatch`, and commits an updated
+`Formula/dishwatch.rb` to `faeton/homebrew-tap` so `brew install dishwatch` picks
+up the new version after `brew update`.
+
+Config lives in `.goreleaser.yaml`. To change what's shipped (add a build target,
+tweak the description, etc.) edit that file and re-run `make publish-dry` to
+preview the generated formula in `dist/homebrew/Formula/dishwatch.rb`.
 
 ## License
 
