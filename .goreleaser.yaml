@@ -1,15 +1,15 @@
 version: 2
 
-project_name: sl
+project_name: dishwatch
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: sl
+  - id: dishwatch
     main: .
-    binary: sl
+    binary: dishwatch
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,7 +24,7 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
 
 archives:
-  - id: sl
+  - id: dishwatch
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
@@ -52,21 +52,23 @@ changelog:
       - "Merge pull request"
 
 brews:
-  - name: sl
+  - name: dishwatch
     repository:
       owner: faeton
       name: homebrew-tap
       branch: main
     directory: Formula
     homepage: https://github.com/faeton/dishwatch
-    description: Tiny Starlink status CLI — talks to the local dish gRPC API
+    description: Starlink dish status, dashboard, and power-bank CLI — talks to the local gRPC API (no auth required)
     license: MIT
     commit_author:
       name: goreleaser
       email: faeton@gmail.com
     install: |
-      bin.install "sl"
+      bin.install "dishwatch"
+      bin.install_symlink "dishwatch" => "sl"
     test: |
+      system "#{bin}/dishwatch", "--help"
       system "#{bin}/sl", "--help"
 
 release:
