@@ -1,12 +1,32 @@
 # dishwatch
 
-Tiny single-file bash CLI that turns your Starlink dish's local gRPC API into a
-live terminal dashboard — connection, signal, aim, GPS, power draw, and 60-second
-sparklines for ping, drop, throughput, and watts. Logs reboots and dropouts so
-you can tell after the fact whether the dish rebooted or your Wi-Fi died.
+Turns your Starlink dish's local gRPC API into a live terminal dashboard —
+connection, signal, aim, GPS, power draw, and 60-second sparklines for ping,
+drop, throughput, and watts. Logs reboots and dropouts so you can tell after the
+fact whether the dish rebooted or your Wi-Fi died.
 
 Tested on **Starlink Mini** (`mini1_panda_prod1`, fw `2026.04.07.mr77639.1`).
 Other generations probably work but some fields may differ.
+
+## Two implementations
+
+The repo contains the tool twice:
+
+- **Go** (`main.go`, `*.go`, `internal/…`) — a single statically-linked binary,
+  zero runtime deps, ~12 MB (~5 MB gzipped), what ships via `brew install
+  dishwatch`. This is what you should use.
+- **Bash** (`sl`) — the original 881-line script that needs `grpcurl` + `jq` at
+  runtime. Kept in the repo as a reference implementation and a portable
+  fallback for anywhere Homebrew isn't available (a random Linux box, a
+  recovery shell, etc.). Still works; not installed by the brew formula.
+
+Both read and write the **same on-disk state** in `~/.cache/sl/`
+(`state.json`, `pb.json`, `events.log`, `geo_*.txt`) with identical schemas, so
+you can run either — even alternate between them — and the energy integrator,
+event log, and power-bank anchor all stay consistent.
+
+Feature parity is 1:1 today. If they ever diverge, the Go version is canonical
+and the bash version will fall behind.
 
 ## Install
 
