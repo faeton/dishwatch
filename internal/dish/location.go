@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Location is a trimmed view of GetLocation. The dish only populates this
@@ -21,6 +24,11 @@ type Location struct {
 func (c *Client) GetLocation(ctx context.Context) (*Location, error) {
 	raw, err := c.Call(ctx, []byte(`{"get_location":{}}`))
 	if err != nil {
+		// Dish returns PermissionDenied when location access is disabled
+		// in the app — treat as "not available" rather than a hard error.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.PermissionDenied {
+			return nil, nil
+		}
 		return nil, err
 	}
 	var wrap struct {
