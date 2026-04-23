@@ -1,0 +1,77 @@
+version: 2
+
+project_name: sl
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sl
+    main: .
+    binary: sl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+archives:
+  - id: sl
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+
+brews:
+  - name: sl
+    repository:
+      owner: faeton
+      name: homebrew-tap
+      branch: main
+    directory: Formula
+    homepage: https://github.com/faeton/dishwatch
+    description: Tiny Starlink status CLI — talks to the local dish gRPC API
+    license: MIT
+    commit_author:
+      name: goreleaser
+      email: faeton@gmail.com
+    install: |
+      bin.install "sl"
+    test: |
+      system "#{bin}/sl", "--help"
+
+release:
+  github:
+    owner: faeton
+    name: dishwatch
+  draft: false
+  prerelease: auto

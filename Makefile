@@ -6,7 +6,7 @@ SHRINK    := -s -w
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
-.PHONY: build release clean cross shrink size deps
+.PHONY: build release clean cross shrink size deps publish publish-dry
 
 # Dev build — includes debug info, fast compile.
 build:
@@ -37,6 +37,18 @@ size:
 
 deps:
 	go mod tidy
+
+# Cut a release: tag, then `make publish`. Example:
+#   git tag v0.1.0 && git push --tags && make publish
+# Requires: goreleaser, gh auth (for pushing to homebrew-tap).
+publish:
+	@command -v goreleaser >/dev/null || { echo "goreleaser not installed — brew install goreleaser" >&2; exit 1; }
+	GITHUB_TOKEN=$$(gh auth token) goreleaser release --clean
+
+# Dry run — build all artifacts into dist/ without publishing.
+publish-dry:
+	@command -v goreleaser >/dev/null || { echo "goreleaser not installed — brew install goreleaser" >&2; exit 1; }
+	goreleaser release --snapshot --clean
 
 clean:
 	rm -rf bin dist
