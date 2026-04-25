@@ -3,13 +3,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/faeton/dishwatch/internal/dish"
+	"github.com/faeton/dishwatch/internal/state"
 )
 
 func parsePositiveInt(s string) (int, error) {
@@ -108,7 +111,31 @@ func usage() {
 }
 
 func die(err error) {
+	if errors.Is(err, dish.ErrUnreachable) {
+		dieUnreachable()
+	}
 	fmt.Fprintf(os.Stderr, "\x1b[38;5;174merror:\x1b[0m %v\n", err)
+	os.Exit(1)
+}
+
+// dieUnreachable mirrors bash `_sl_die_unreachable`: short, friendly hint
+// pointing the user at the likely cause (wrong network, dish power, etc.)
+// instead of the raw "context deadline exceeded" from the gRPC stack.
+func dieUnreachable() {
+	addr := os.Getenv("STARLINK_DISH")
+	if addr == "" {
+		addr = "192.168.100.1:9200"
+	}
+	fmt.Fprintf(os.Stderr, "\x1b[38;5;174mdish unreachable\x1b[0m at %s\n", addr)
+	fmt.Fprintln(os.Stderr, "  · not on the Starlink network? check Wi-Fi / ethernet")
+	fmt.Fprintln(os.Stderr, "  · dish rebooting or powered off?")
+	fmt.Fprintln(os.Stderr, "  · try: ping 192.168.100.1")
+	if snap, err := state.Load(); err == nil && snap != nil && snap.TS > 0 {
+		age := time.Now().Unix() - snap.TS
+		fmt.Fprintf(os.Stderr, "  · last seen %s ago — run \x1b[38;5;253msl dash\x1b[0m for frozen snapshot + events\n",
+			state.HumanDur(age))
+	}
+	_ = state.MarkUnreachable(addr)
 	os.Exit(1)
 }
 

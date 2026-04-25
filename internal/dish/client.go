@@ -10,6 +10,7 @@ package dish
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,6 +23,12 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
+
+// ErrUnreachable is returned (wrapped) when we can't reach the dish at all —
+// the TCP/HTTP2 dial failed before any RPC happened. Callers can use
+// errors.Is to render a friendlier message than the raw "context deadline
+// exceeded" surfaced by the gRPC stack.
+var ErrUnreachable = errors.New("dish unreachable")
 
 const (
 	defaultAddr   = "192.168.100.1:9200"
@@ -54,7 +61,7 @@ func New(ctx context.Context, addr string) (*Client, error) {
 		grpc.WithBlock(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", addr, err)
+		return nil, fmt.Errorf("%w at %s: %w", ErrUnreachable, addr, err)
 	}
 
 	rc := grpcreflect.NewClientAuto(ctx, conn)
