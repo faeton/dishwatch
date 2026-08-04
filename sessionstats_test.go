@@ -132,6 +132,37 @@ func TestAccumulateKeepsLatencyOnPartialLoss(t *testing.T) {
 	}
 }
 
+// The three reported bands must partition observed time exactly — no second
+// counted twice, none dropped. Degraded is derived from the other two, so the
+// risk is an off-by-one at a boundary rather than a bookkeeping slip.
+func TestBandsPartitionObservedTime(t *testing.T) {
+	// 4 clean, 3 partial (50% loss → degraded), 3 dark.
+	h := ring("ccccpppddd")
+	var st state.Stats
+	accumulate(&st, h, h.Current, 10)
+
+	if st.CleanSeconds != 4 {
+		t.Errorf("CleanSeconds = %d, want 4", st.CleanSeconds)
+	}
+	if got := st.DegradedSeconds(); got != 3 {
+		t.Errorf("DegradedSeconds() = %d, want 3", got)
+	}
+	if st.OutageSeconds != 3 {
+		t.Errorf("OutageSeconds = %d, want 3", st.OutageSeconds)
+	}
+	if sum := st.CleanPct() + st.DegradedPct() + st.DarkPct(); sum < 99.99 || sum > 100.01 {
+		t.Errorf("bands sum to %v%%, want 100", sum)
+	}
+}
+
+// A truncated or hand-edited file must not render a negative percentage.
+func TestDegradedNeverNegative(t *testing.T) {
+	st := state.Stats{Samples: 10, CleanSeconds: 8, OutageSeconds: 5} // inconsistent
+	if got := st.DegradedSeconds(); got != 0 {
+		t.Errorf("DegradedSeconds() = %d, want 0 for inconsistent input", got)
+	}
+}
+
 func TestAccumulateWrapsRing(t *testing.T) {
 	// Cursor past the end of the ring: indices must wrap, not panic.
 	h := ring("cccc")

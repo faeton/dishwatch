@@ -7,7 +7,7 @@
 
 ## Correctness — fix regardless of architecture
 
-- [ ] **The state transaction is not serialized — and it now spans two files.**
+- [x] **The state transaction is not serialized — and it now spans two files.**
   Both `state.Save` and `SaveStats` use temp-plus-rename, which is atomic but
   not *exclusive*. The real bug is that load → integrate → save can interleave
   across processes, so two readers consume the same `lastCurrent` cursor and
@@ -23,7 +23,7 @@
   without desyncing the other), but across processes they can still diverge,
   because a competing poll can land in the window between the two. The lock
   belongs around `snapshotAndLog` as a unit.
-- [ ] **First-observation energy undercount** in `dash.go integrateEnergy` —
+- [x] **First-observation energy undercount** in `dash.go integrateEnergy` —
   narrower than previously described here. `prev == nil` *does* bootstrap (it
   is folded into `reboot`). The actual hole is the final `else` branch: a
   **same-boot snapshot that exists but carries `LastCurrent == 0`** advances
@@ -41,7 +41,7 @@
   assert the shared bootstrap rule directly instead. Add tests for **both**
   `prev == nil` and existing-snapshot-with-zero-cursor; they are different
   paths and were previously lumped under one "first observation" label.
-- [ ] **Atomic-rename writes collide under concurrency.** Every writer uses a
+- [x] **Atomic-rename writes collide under concurrency.** Every writer uses a
   fixed temp name — `p + ".tmp"` in `state.Save` (store.go:108), the events log
   (store.go:287), and `SaveStats` (stats.go). Two processes writing the same
   file at once therefore interleave into the *same* temp path before renaming,
@@ -53,12 +53,12 @@
   coordinates the Go CLI and the app but not bash. Either teach `sl` the lock
   or retire the shared path — the `StorageDir`/`UserCacheDir` move does the
   latter by default.
-- [ ] **The read side needs the lock too.** `buildDashboard` calls `LoadStats`
+- [x] **The read side needs the lock too.** `buildDashboard` calls `LoadStats`
   and `state.Load` as two separate reads, so a poll landing between them
   produces a DTO mixing generation N stats with generation N−1 energy. Either
   share the lock on read, or have the transaction hand both snapshots back
   directly (which also fixes `renderEnergy` re-reading what was just written).
-- [ ] **No tests anywhere.** `integrateEnergy` and `History.LastN/Latest` are
+- [x] **No tests anywhere.** `integrateEnergy` and `History.LastN/Latest` are
   pure and the most error-prone code in the repo. A wrong cursor ships silent
   Wh lies for weeks with nothing to catch it. Table tests (reboot mid-ring,
   gap > ring, cursor jump, all-zero `powerIn`, first observation) go in
@@ -70,14 +70,22 @@
 
 ## Contract integrity (app ↔ CLI)
 
-- [ ] **The Swift decoder launders drift into fake data.** `DishData.init(from:)`
-  falls back per-key to the struct's memberwise defaults — and those defaults
-  are the *design mockup numbers*. Verified: decoding
-  `{"state":"Connected","pingMs":17.6,"upMbps":0.4}` produces
+- [x] **The Swift decoder launders drift into fake data.** `DishData.init(from:)`
+  fell back per-key to the struct's memberwise defaults — and those defaults
+  were the *design mockup numbers*. Decoding
+  `{"state":"Connected","pingMs":17.6,"upMbps":0.4}` produced
   `signalScore=86`, `downMbps=142.5`, `uptimeHours=7.3`, `bankPct=78` — shown
-  in the UI as live data with the footer still reading "live". Missing fields
-  must degrade to an explicit unknown. Resilient decoding was meant to survive
-  firmware changes; as written it hides them.
+  in the UI as live data with the footer still reading "live".
+
+  **Fixed:** the memberwise defaults are now neutral (0 / `""` / `.offline`),
+  and the mockup figures moved to `DishData.sample`, which only
+  `SampleProvider` and the render harness construct. Sample data and decode
+  fallbacks are now separate jobs.
+
+- [ ] **The session block still needs atomic decoding** when the footer is
+  built. Neutral defaults fix the all-absent case, but not a partial payload:
+  one missing or mistyped `sess*` key while `obsSeconds` is present would
+  render `peak ↓0 · 0 W` rather than hiding the row.
 
   **This blocks [macos-ui.md](macos-ui.md).** That doc's session footer relies
   on zero meaning "fewer than 120 samples — hide the row", and instructs that
@@ -119,7 +127,7 @@
   history is included (claim matches behavior). The current pairing is the one
   combination that isn't defensible, and it undercuts the whole reason the word
   "Observed" was chosen over "Session".
-- [ ] **`deviceId` is mislabeled.** It's filled from
+- [x] **`deviceId` is mislabeled.** It's filled from
   `DeviceInfo.HardwareVersion` — the same source as `hardwareShort` — so the
   popover's "device ID" is really a hardware model string
   (`mini1_panda_prod1`). `internal/dish/status.go` doesn't decode a real device
@@ -181,10 +189,10 @@ Measured cost of one dashboard snapshot:
   cooperative-pool thread for ~700 ms per poll. No timeout — a hung dish leaks
   processes. Cancellation can't interrupt it, so changing the refresh interval
   mid-poll briefly runs two `dishwatch json` processes, both writing state.
-- [ ] **Hardcoded developer path.** `~/Sites/dishwatch/bin/dishwatch` is in
+- [x] **Hardcoded developer path.** `~/Sites/dishwatch/bin/dishwatch` is in
   shipped code and ranked *above* Homebrew. The `/bin/zsh -lc` fallback spawns
   a login shell per lookup.
-- [ ] **Silent sample mode.** Failure to locate the CLI swaps in
+- [x] **Silent sample mode.** Failure to locate the CLI swaps in
   `SampleProvider` with no visible signal — fine in dev, dangerous shipped.
 - [ ] **Dead battery workflow.** `BatterySetupSheet`'s "Start tracking" only
   calls `dismiss()`; "Calibrate" has no action at all. The primary interaction
