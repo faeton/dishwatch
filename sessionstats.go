@@ -69,49 +69,12 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 		st.ObsStartTs = now
 	}
 
-	if n > 0 {
-		foldRing(h.PopPingLatencyMs, cur, n, func(v float64) {
-			if v > 0 { // 0 = no measurement, not 0 ms
-				st.PingSum += v
-				st.PingCount++
-				if v > st.PingMax {
-					st.PingMax = v
-				}
-			}
-		})
-		foldRing(h.PopPingDropRate, cur, n, func(v float64) {
-			st.DropSum += v
-			if v > st.DropMax {
-				st.DropMax = v
-			}
-		})
-		foldRing(h.DownlinkThroughputBps, cur, n, func(v float64) {
-			st.DownSum += v
-			if v > st.DownMax {
-				st.DownMax = v
-			}
-		})
-		foldRing(h.UplinkThroughputBps, cur, n, func(v float64) {
-			st.UpSum += v
-			if v > st.UpMax {
-				st.UpMax = v
-			}
-		})
-		foldRing(h.PowerIn, cur, n, func(v float64) {
-			if v > 0 { // hardware without a power sensor reports 0
-				st.PowerSum += v
-				st.PowerCount++
-				if v > st.PowerMax {
-					st.PowerMax = v
-				}
-			}
-		})
-		if n > ringLen {
-			n = ringLen
-		}
-		st.Samples += n
+	if n > ringLen {
+		n = ringLen
 	}
+	accumulate(st, h, cur, n)
 
+	st.Version = state.StatsVersion
 	st.Boots = boots
 	st.LastUptimeS = uptime
 	st.LastCurrent = cur
@@ -120,17 +83,81 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 	return st
 }
 
-// foldRing walks the last n samples ending at the write cursor `cur`, oldest
-// first, calling fn for each. n is clamped to the ring length.
-func foldRing(ring []float64, cur, n int64, fn func(float64)) {
-	rl := int64(len(ring))
-	if rl == 0 || n <= 0 {
+// accumulate folds the n samples ending at cursor `cur` into st. It is the
+// pure half of integrateStats — no I/O, no clock — so the sample-level rules
+// can be tested against a synthetic ring.
+//
+// One indexed pass rather than a fold per ring, because the metrics are not
+// independent: whether a latency sample means anything depends on that same
+// second's drop rate, and outage runs have to be walked in order to be
+// segmented at all.
+func accumulate(st *state.Stats, h *dish.History, cur, n int64) {
+	if n <= 0 {
 		return
 	}
-	if n > rl {
-		n = rl
-	}
 	for i := cur - n; i < cur; i++ {
-		fn(ring[((i%rl)+rl)%rl])
+		drop := at(h.PopPingDropRate, i)
+		ping := at(h.PopPingLatencyMs, i)
+		down := at(h.DownlinkThroughputBps, i)
+		up := at(h.UplinkThroughputBps, i)
+		pw := at(h.PowerIn, i)
+
+		st.DropSum += drop
+		if drop > st.DropMax {
+			st.DropMax = drop
+		}
+		if drop == 0 {
+			st.CleanSeconds++
+		}
+
+		// Segment loss into events. A mean is the wrong summary when the
+		// distribution has no middle — see Stats.CleanPct.
+		if drop >= state.OutageThreshold {
+			st.OutageSeconds++
+			st.CurrentOutageS++
+		} else if st.CurrentOutageS > 0 {
+			st.OutageCount++
+			if st.CurrentOutageS > st.LongestOutageS {
+				st.LongestOutageS = st.CurrentOutageS
+			}
+			st.CurrentOutageS = 0
+		}
+
+		// Only trust latency when at least one packet returned. A fully dark
+		// second still carries a plausible-looking number.
+		if ping > 0 && drop < 1.0 {
+			st.PingSum += ping
+			st.PingCount++
+			if ping > st.PingMax {
+				st.PingMax = ping
+			}
+		}
+
+		st.DownSum += down
+		if down > st.DownMax {
+			st.DownMax = down
+		}
+		st.UpSum += up
+		if up > st.UpMax {
+			st.UpMax = up
+		}
+		if pw > 0 { // hardware without a power sensor reports 0
+			st.PowerSum += pw
+			st.PowerCount++
+			if pw > st.PowerMax {
+				st.PowerMax = pw
+			}
+		}
 	}
+	st.Samples += n
+}
+
+// at reads ring position i, wrapping. Rings that came back short or empty
+// (a firmware that omits a field) read as 0 rather than panicking.
+func at(ring []float64, i int64) float64 {
+	rl := int64(len(ring))
+	if rl == 0 {
+		return 0
+	}
+	return ring[((i%rl)+rl)%rl]
 }

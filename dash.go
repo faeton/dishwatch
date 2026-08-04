@@ -500,8 +500,19 @@ func renderObserved(w io.Writer, L ui.Layout) {
 	}
 	fmt.Fprintf(w, "\n%s%s %s%s\n", ui.Hdr, hdr, ui.HR(pad), ui.Rst)
 
-	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · loss %.2f%% · worst second %.1f%%%s\n",
-		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(), st.DropAvgPct(), st.DropMaxPct(), ui.Rst)
+	// Latency is averaged over seconds where a packet actually returned; loss is
+	// reported as clean-second share plus outage events, because on a moving
+	// dish the distribution is bimodal and its mean names a state that never
+	// happened. See docs/macos-ui.md.
+	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · %.1f%% clean seconds%s\n",
+		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(), st.CleanPct(), ui.Rst)
+	if n := st.Outages(); n > 0 {
+		fmt.Fprintf(w, "  %sOutage%s %s%d · %s dark · longest %s%s\n",
+			ui.Lbl, ui.Rst, ui.Dim, n,
+			state.HumanDur(st.OutageSeconds), state.HumanDur(st.LongestOutage()), ui.Rst)
+	} else {
+		fmt.Fprintf(w, "  %sOutage%s %snone%s\n", ui.Lbl, ui.Rst, ui.Dim, ui.Rst)
+	}
 	fmt.Fprintf(w, "  %sPeak  %s%s↓ %.2f Mbps  ↑ %.2f Mbps%s\n",
 		ui.Lbl, ui.Rst, ui.Dim, st.DownPeakMbps(), st.UpPeakMbps(), ui.Rst)
 	fmt.Fprintf(w, "  %sData  %s%s↓ %s  ↑ %s%s\n",

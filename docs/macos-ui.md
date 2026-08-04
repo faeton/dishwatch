@@ -26,14 +26,52 @@ impression it creates is false.
 
 > If a metric reads zero when idle (throughput), show a **peak** over a labelled
 > window — never a mean.
-> If a metric is sampled continuously (ping, drop, power), show a **mean** over a
-> labelled window.
+> If a metric is **bimodal** (loss on a moving dish), show **event counts** —
+> how many, how long, how much of the time — never a mean.
+> If a metric is sampled continuously and unimodally (ping, power), show a
+> **mean** over a labelled window.
 > A metric's *total* is never misleading, even when its mean is — so throughput
 > gets **volume transferred** where a mean would lie.
+> And only average samples that were actually **measured** — see below.
 
-That last clause is the escape hatch from the utilization trap. The sum of a
-throughput series isn't a rate at all; it's data volume, which is exactly what a
-user wants to know and carries no false implication about link quality.
+That last-but-one clause is the escape hatch from the utilization trap. The sum
+of a throughput series isn't a rate at all; it's data volume, which is exactly
+what a user wants to know and carries no false implication about link quality.
+
+### Why loss gets events, not a mean
+
+Measured on a mobile dish driving through tunnels, over 900 seconds:
+
+| bucket | share |
+|---|---|
+| clean (drop = 0) | 65.1% |
+| fully dark (drop = 100%) | 21.7% |
+| anything in between | 13.2% |
+
+That averages to `loss 25.5%` — a figure not one single second experienced. The
+distribution has no middle, so its mean names a state that never happened. What
+the same window actually contains is **11 outages, longest 58 s, 3m 18s dark**,
+which is both true and actionable. `clean %` replaces `loss %` as the headline
+because the fraction of usable seconds is what you feel.
+
+Corollary: `worst second` is dead weight on a link like this — it reads 100%
+permanently.
+
+### Why ping is gated on drop
+
+The dish reports a plausible-looking latency for **every** second, including
+ones where 100% of packets dropped. Measured over the same window: 231 of 231
+fully-dark seconds carried a nonzero value, median 19.7 ms. There is no
+sentinel, no zero, nothing to filter on — the fabricated values look exactly
+like real ones.
+
+So latency is counted only when `drop < 1.0`: if even one packet returned the
+measurement is real, and if none did it is invented. Partial loss still counts,
+because those packets genuinely made the round trip.
+
+The effect on the headline number is small (24.5 → 23.3 ms) and that is
+precisely the hazard — nothing about the polluted mean looked wrong. The tail is
+where it showed: dark seconds reached 141 ms and were what pushed p95 to 55 ms.
 
 ## Windows
 
@@ -53,9 +91,10 @@ mean-throughput reading we're removing.
 
 | Metric | Statistic | Window | Where | Label |
 |---|---|---|---|---|
-| Ping | mean, zeros excluded | last 60 s | spark trailing | `avg 31 ms` |
-| Ping | mean, zeros excluded | observed | footer | `ping 29` |
-| Drop | mean | observed | footer only | `loss 0.31%` |
+| Ping | mean, measured seconds only | last 60 s | spark trailing | `avg 31 ms` |
+| Ping | mean, measured seconds only | observed | footer | `ping 29` |
+| Drop | **clean-second share** | observed | footer | `92% clean` |
+| Drop | **outage events** | observed | footer | `11 outages · longest 58s` |
 | Drop | current | now | grid sub-label | `drop 0.2%` |
 | Down | **peak** | observed | footer | `peak ↓186` |
 | Up | **peak** | observed | footer | `peak ↑41` |
@@ -80,7 +119,8 @@ useless — so the mean is the headline and the worst second is detail.
 | Down spark trailing | *(remove — the footer carries the honest peak)* |
 | Power spark trailing | `avg %.1f W` |
 | Power grid sub-label | `%.1f W session` |
-| Session footer | `Observed %@ · ping %d · loss %.2f%% · peak ↓%d ↑%d · %.1f W` |
+| Session footer | `Observed %@ · ping %d · %d%% clean · peak ↓%d ↑%d · %.1f W` |
+| Session footer, second line when outages > 0 | `%d outages · %@ dark · longest %@` |
 | Footer, cold start (< 2 min observed) | *hide the row entirely — never show zeros as statistics* |
 | Tooltip on the footer | `Stats cover time DishWatch was running. Gaps while quit are excluded.` |
 
@@ -120,8 +160,12 @@ collected, which is the app's cue to hide the footer.
 |---|---|
 | `obsSeconds` | samples actually integrated this boot |
 | `obsCoverage` | `obsSeconds ÷ uptime`, 0..1 |
-| `sessPingAvg` | ms, zeros excluded |
-| `sessDropAvg` | percent |
+| `sessPingAvg` | ms, seconds with a returned packet only |
+| `sessDropAvg` | percent — retained for completeness; **do not display**, see above |
+| `sessCleanPct` | share of seconds with zero loss |
+| `sessOutages` | count, including one in progress |
+| `sessOutageSeconds` | total seconds at ≥90% loss |
+| `sessLongestOutage` | seconds, including a run in progress |
 | `sessDownPeak` / `sessUpPeak` | Mbps |
 | `sessDownBytes` / `sessUpBytes` | bytes transferred |
 | `sessPowerAvg` / `sessPowerPeak` | watts |

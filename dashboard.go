@@ -51,16 +51,23 @@ type Dashboard struct {
 	// absence of a session mean for down/up: mean throughput measures how much
 	// was used, not how fast the link is, so only peak and total volume are
 	// exposed. See docs/macos-ui.md.
-	ObsSeconds    int64   `json:"obsSeconds"`
-	ObsCoverage   float64 `json:"obsCoverage"` // observed ÷ uptime, 0..1
-	SessPingAvg   float64 `json:"sessPingAvg"`
-	SessDropAvg   float64 `json:"sessDropAvg"` // percent
-	SessDownPeak  float64 `json:"sessDownPeak"`
-	SessUpPeak    float64 `json:"sessUpPeak"`
-	SessDownBytes float64 `json:"sessDownBytes"`
-	SessUpBytes   float64 `json:"sessUpBytes"`
-	SessPowerAvg  float64 `json:"sessPowerAvg"`
-	SessPowerPeak float64 `json:"sessPowerPeak"`
+	ObsSeconds  int64   `json:"obsSeconds"`
+	ObsCoverage float64 `json:"obsCoverage"` // observed ÷ uptime, 0..1
+	SessPingAvg float64 `json:"sessPingAvg"` // seconds with a returned packet only
+	SessDropAvg float64 `json:"sessDropAvg"` // percent — poor summary, prefer clean/outages
+
+	// Loss segmented into events. On a moving dish the link is either clean or
+	// fully dark, so these describe it and the mean above does not.
+	SessCleanPct      float64 `json:"sessCleanPct"`
+	SessOutages       int64   `json:"sessOutages"`
+	SessOutageSeconds int64   `json:"sessOutageSeconds"`
+	SessLongestOutage int64   `json:"sessLongestOutage"`
+	SessDownPeak      float64 `json:"sessDownPeak"`
+	SessUpPeak        float64 `json:"sessUpPeak"`
+	SessDownBytes     float64 `json:"sessDownBytes"`
+	SessUpBytes       float64 `json:"sessUpBytes"`
+	SessPowerAvg      float64 `json:"sessPowerAvg"`
+	SessPowerPeak     float64 `json:"sessPowerPeak"`
 
 	DishAddr        string  `json:"dishAddr"`
 	OnBattery       bool    `json:"onBattery"`
@@ -157,6 +164,10 @@ func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr st
 		d.ObsCoverage = st.Coverage()
 		d.SessPingAvg = round1(st.PingAvg())
 		d.SessDropAvg = round1(st.DropAvgPct())
+		d.SessCleanPct = round1(st.CleanPct())
+		d.SessOutages = st.Outages()
+		d.SessOutageSeconds = st.OutageSeconds
+		d.SessLongestOutage = st.LongestOutage()
 		d.SessDownPeak = round1(st.DownPeakMbps())
 		d.SessUpPeak = round1(st.UpPeakMbps())
 		d.SessDownBytes = st.DownBytes()
