@@ -80,6 +80,7 @@ func snapshotAndLog(s *dish.Status, h *dish.History) {
 		integrateEnergy(s, h, prev, now)
 	_ = state.DiffAndLog(cur, prev)
 	_ = state.Save(cur)
+	integrateStats(s, h, now)
 }
 
 // integrateEnergy advances the Wh accumulator based on the powerIn ring in
@@ -445,31 +446,70 @@ func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 		return
 	}
 
-	pingAvg, pingMax, pingP95 := stats(pings, true)
-	dropAvg := mean(drops) * 100
+	// Statistic per metric follows one rule: metrics that read zero when idle
+	// (throughput) get a peak over a labelled window — never a mean, because an
+	// idle dish averages ~0 Mbps on a perfect link and that reads as a fault.
+	// Continuously-sampled metrics (ping, drop, power) get a mean.
+	pingAvg, _, pingP95 := stats(pings, true)
 	dropMax := maxf(drops) * 100
-	dnAvg := mean(dn) / 1e6
-	dnMax := maxf(dn) / 1e6
-	upAvg := mean(up) / 1e6
-	upMax := maxf(up) / 1e6
+	dnNow, dnMax := lastOf(dn)/1e6, maxf(dn)/1e6
+	upNow, upMax := lastOf(up)/1e6, maxf(up)/1e6
 
 	fmt.Fprintf(w, "\n%s⏱ Last %ds %s%s\n", ui.Hdr, L.SparkW, ui.HR(L.Width-14), ui.Rst)
-	fmt.Fprintf(w, "  %sPing  %s%s%s  %savg %.1f ms · max %.1f ms · p95 %.1f ms · drop %.1f%%%s\n",
-		ui.Lbl, ui.OK, ui.Spark(pings, 0), ui.Rst, ui.Dim, pingAvg, pingMax, pingP95, dropAvg, ui.Rst)
+	fmt.Fprintf(w, "  %sPing  %s%s%s  %savg %.1f ms · p95 %.1f ms%s\n",
+		ui.Lbl, ui.OK, ui.Spark(pings, 0), ui.Rst, ui.Dim, pingAvg, pingP95, ui.Rst)
 	fmt.Fprintf(w, "  %sDrop  %s%s%s  %sper-second loss · peak %.1f%%%s\n",
 		ui.Lbl, ui.Err, ui.Spark(drops, 0), ui.Rst, ui.Dim, dropMax, ui.Rst)
-	fmt.Fprintf(w, "  %sDown  %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
-		ui.Lbl, ui.OK, ui.Spark(dn, 0), ui.Rst, ui.Dim, dnAvg, dnMax, ui.Rst)
-	fmt.Fprintf(w, "  %sUp    %s%s%s  %savg %.2f Mbps  max %.2f Mbps%s\n",
-		ui.Lbl, ui.OK, ui.Spark(up, 0), ui.Rst, ui.Dim, upAvg, upMax, ui.Rst)
+	fmt.Fprintf(w, "  %sDown  %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
+		ui.Lbl, ui.OK, ui.Spark(dn, 0), ui.Rst, ui.Dim, dnNow, dnMax, ui.Rst)
+	fmt.Fprintf(w, "  %sUp    %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
+		ui.Lbl, ui.OK, ui.Spark(up, 0), ui.Rst, ui.Dim, upNow, upMax, ui.Rst)
 
 	if len(pw) > 0 && maxf(pw) > 0 {
 		pwNow := pw[len(pw)-1]
-		pwAvg, pwMax := meanPositive(pw)
-		fmt.Fprintf(w, "  %sPower %s%s%s  %snow %.1f W  avg %.1f W  max %.1f W%s\n",
-			ui.Lbl, ui.Warn, ui.Spark(pw, 0), ui.Rst, ui.Dim, pwNow, pwAvg, pwMax, ui.Rst)
+		pwAvg, _ := meanPositive(pw)
+		fmt.Fprintf(w, "  %sPower %s%s%s  %snow %.1f W · avg %.1f W%s\n",
+			ui.Lbl, ui.Warn, ui.Spark(pw, 0), ui.Rst, ui.Dim, pwNow, pwAvg, ui.Rst)
 	}
 	renderEnergy(w, L)
+	renderObserved(w, L)
+}
+
+// renderObserved writes the long-window section fed by stats.json. Every figure
+// here covers *observed* samples within the current dish boot — time the CLI
+// was not running contributes nothing and is never estimated. The header says
+// so, which is why no per-line qualifier is needed.
+func renderObserved(w io.Writer, L ui.Layout) {
+	st, err := state.LoadStats()
+	if err != nil || !st.Ready() {
+		return // too few samples to call these statistics
+	}
+
+	// The header carries the caveat so no individual line has to: "observed"
+	// makes no claim about the time the CLI was not running, and naming the
+	// uptime alongside it shows how much of this boot went unwatched.
+	hdr := fmt.Sprintf("📊 Observed %s", state.HumanDur(st.ObservedSeconds()))
+	if st.Coverage() < 0.95 {
+		hdr += fmt.Sprintf(" of %s uptime", state.HumanDur(st.LastUptimeS))
+	} else {
+		hdr += " · all of this boot"
+	}
+	pad := L.Width - ui.VisibleLen(hdr) - 3
+	if pad < 0 {
+		pad = 0
+	}
+	fmt.Fprintf(w, "\n%s%s %s%s\n", ui.Hdr, hdr, ui.HR(pad), ui.Rst)
+
+	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · loss %.2f%% · worst second %.1f%%%s\n",
+		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(), st.DropAvgPct(), st.DropMaxPct(), ui.Rst)
+	fmt.Fprintf(w, "  %sPeak  %s%s↓ %.2f Mbps  ↑ %.2f Mbps%s\n",
+		ui.Lbl, ui.Rst, ui.Dim, st.DownPeakMbps(), st.UpPeakMbps(), ui.Rst)
+	fmt.Fprintf(w, "  %sData  %s%s↓ %s  ↑ %s%s\n",
+		ui.Lbl, ui.Rst, ui.Dim, humanBytes(st.DownBytes()), humanBytes(st.UpBytes()), ui.Rst)
+	if st.PowerCount > 0 {
+		fmt.Fprintf(w, "  %sPower %s%savg %.1f W · peak %.1f W%s\n",
+			ui.Lbl, ui.Rst, ui.Dim, st.PowerAvg(), st.PowerMax, ui.Rst)
+	}
 }
 
 // renderEnergy writes the Energy (and optional Bank) lines, derived from
@@ -622,6 +662,30 @@ func meanPositive(vs []float64) (avg, max float64) {
 		return 0, 0
 	}
 	return s / float64(n), max
+}
+
+func lastOf(vs []float64) float64 {
+	if len(vs) == 0 {
+		return 0
+	}
+	return vs[len(vs)-1]
+}
+
+// humanBytes formats a byte count with a decimal (SI) prefix — the convention
+// ISPs and speed tests use, so the number matches what a data cap is quoted in.
+func humanBytes(b float64) string {
+	switch {
+	case b >= 1e12:
+		return fmt.Sprintf("%.2f TB", b/1e12)
+	case b >= 1e9:
+		return fmt.Sprintf("%.2f GB", b/1e9)
+	case b >= 1e6:
+		return fmt.Sprintf("%.1f MB", b/1e6)
+	case b >= 1e3:
+		return fmt.Sprintf("%.0f kB", b/1e3)
+	default:
+		return fmt.Sprintf("%.0f B", b)
+	}
 }
 
 func maxf(vs []float64) float64 {

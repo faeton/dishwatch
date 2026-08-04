@@ -131,6 +131,10 @@ Phase 0 and Phase 1 are independent and can run in parallel.
 6. **Watch reconnect race** (`watch.go` ~119) — CLI-only pain; fix it here but
    don't let it block the app track.
 
+Metric presentation (which statistic, which window, exact label strings) is
+settled separately in [macos-ui.md](macos-ui.md) — the Go side already emits the
+data; the Swift views have not been updated yet.
+
 ## Phase 1 — the `.app` bundle
 
 Currently `app/Package.swift` declares only an `.executable`. Consequences that

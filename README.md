@@ -23,7 +23,10 @@ The repo contains the tool twice:
 Both read and write the **same on-disk state** in `~/.cache/sl/`
 (`state.json`, `pb.json`, `events.log`, `geo_*.txt`) with identical schemas, so
 you can run either — even alternate between them — and the energy integrator,
-event log, and power-bank anchor all stay consistent.
+event log, and power-bank anchor all stay consistent. The one exception is
+`stats.json` (the `Observed` accumulator), which only the Go version maintains:
+bash rebuilds `state.json` from scratch on every write, so a shared file would
+lose the Go-only fields the moment `sl` ran.
 
 Feature parity is 1:1 today. If they ever diverge, the Go version is canonical
 and the bash version will fall behind.
@@ -148,6 +151,8 @@ These are genuine dish/firmware limitations, not missing features:
 ## Files
 
 - `~/.cache/sl/state.json` — last successful snapshot (includes energy accumulator)
+- `~/.cache/sl/stats.json` — observed-sample accumulator behind the `Observed`
+  section (Go only — bash rewrites `state.json` wholesale, so this lives apart)
 - `~/.cache/sl/pb.json` — power-bank anchor (if set via `sl pb <pct>`)
 - `~/.cache/sl/events.log` — append-only transition log (auto-trimmed to 2000 lines)
 - `~/.cache/sl/geo_<lat>_<lon>.txt` — cached Nominatim lookups

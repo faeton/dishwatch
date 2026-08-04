@@ -45,14 +45,31 @@ type Dashboard struct {
 	UpAvg             float64   `json:"upAvg"`
 	PowerSeries       []float64 `json:"powerSeries"`
 	PowerAvg          float64   `json:"powerAvg"`
-	DishAddr          string    `json:"dishAddr"`
-	OnBattery         bool      `json:"onBattery"`
-	BankAnchored      bool      `json:"bankAnchored"`
-	BankPct           float64   `json:"bankPct"`
-	BankWh            float64   `json:"bankWh"`
-	BankWhLeft        float64   `json:"bankWhLeft"`
-	BankSecondsLeft   int       `json:"bankSecondsLeft"`
-	AnchoredAgoText   string    `json:"anchoredAgoText"`
+	// Observed-session aggregates from stats.json. Unlike the fields above
+	// (which are 60-second window figures off the dish's ring buffer) these
+	// cover every sample seen during the current dish boot. Note the deliberate
+	// absence of a session mean for down/up: mean throughput measures how much
+	// was used, not how fast the link is, so only peak and total volume are
+	// exposed. See docs/macos-ui.md.
+	ObsSeconds    int64   `json:"obsSeconds"`
+	ObsCoverage   float64 `json:"obsCoverage"` // observed ÷ uptime, 0..1
+	SessPingAvg   float64 `json:"sessPingAvg"`
+	SessDropAvg   float64 `json:"sessDropAvg"` // percent
+	SessDownPeak  float64 `json:"sessDownPeak"`
+	SessUpPeak    float64 `json:"sessUpPeak"`
+	SessDownBytes float64 `json:"sessDownBytes"`
+	SessUpBytes   float64 `json:"sessUpBytes"`
+	SessPowerAvg  float64 `json:"sessPowerAvg"`
+	SessPowerPeak float64 `json:"sessPowerPeak"`
+
+	DishAddr        string  `json:"dishAddr"`
+	OnBattery       bool    `json:"onBattery"`
+	BankAnchored    bool    `json:"bankAnchored"`
+	BankPct         float64 `json:"bankPct"`
+	BankWh          float64 `json:"bankWh"`
+	BankWhLeft      float64 `json:"bankWhLeft"`
+	BankSecondsLeft int     `json:"bankSecondsLeft"`
+	AnchoredAgoText string  `json:"anchoredAgoText"`
 }
 
 // runJSON implements `dishwatch json`: emit one Dashboard snapshot as JSON. On
@@ -133,6 +150,19 @@ func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr st
 		}
 		_, pwAvg := meanPositive(d.PowerSeries)
 		d.PowerAvg = round1(pwAvg)
+	}
+
+	if st, _ := state.LoadStats(); st.Ready() {
+		d.ObsSeconds = st.ObservedSeconds()
+		d.ObsCoverage = st.Coverage()
+		d.SessPingAvg = round1(st.PingAvg())
+		d.SessDropAvg = round1(st.DropAvgPct())
+		d.SessDownPeak = round1(st.DownPeakMbps())
+		d.SessUpPeak = round1(st.UpPeakMbps())
+		d.SessDownBytes = st.DownBytes()
+		d.SessUpBytes = st.UpBytes()
+		d.SessPowerAvg = round1(st.PowerAvg())
+		d.SessPowerPeak = round1(st.PowerMax)
 	}
 
 	// Power-bank: only populated when an anchor is set (sl pb). With pb
