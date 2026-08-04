@@ -10,6 +10,10 @@ import (
 // Add fields as new subcommands need them.
 type Status struct {
 	DeviceInfo struct {
+		// Id is the dish's own identifier ("ut51a08b19-…"). Distinct from
+		// HardwareVersion, which is a model string ("mini1_panda_prod1") — the
+		// dashboard used to show the latter under a "device ID" label.
+		Id              string `json:"id"`
 		HardwareVersion string `json:"hardwareVersion"`
 		SoftwareVersion string `json:"softwareVersion"`
 		CountryCode     string `json:"countryCode"`

@@ -58,7 +58,11 @@ type Dashboard struct {
 
 	// Loss segmented into events. On a moving dish the link is either clean or
 	// fully dark, so these describe it and the mean above does not.
+	// Three-way, not two: the band between clean and dark is mostly 20–90%
+	// loss, so folding it into either neighbour misrepresents it.
 	SessCleanPct      float64 `json:"sessCleanPct"`
+	SessDegradedPct   float64 `json:"sessDegradedPct"`
+	SessDarkPct       float64 `json:"sessDarkPct"`
 	SessOutages       int64   `json:"sessOutages"`
 	SessOutageSeconds int64   `json:"sessOutageSeconds"`
 	SessLongestOutage int64   `json:"sessLongestOutage"`
@@ -125,7 +129,7 @@ func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr st
 		UptimeHours:   float64(s.DeviceState.UptimeS) / 3600,
 		Boots:         int(s.DeviceInfo.Bootcount),
 		HardwareShort: hardwareShort(s.DeviceInfo.HardwareVersion),
-		DeviceID:      s.DeviceInfo.HardwareVersion,
+		DeviceID:      deviceID(s),
 		Firmware:      trimFirmware(s.DeviceInfo.SoftwareVersion),
 		DownMbps:      round1(s.DownlinkThroughputBps / 1e6),
 		UpMbps:        round1(s.UplinkThroughputBps / 1e6),
@@ -171,6 +175,8 @@ func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr st
 		d.SessPingAvg = round1(st.PingAvg())
 		d.SessDropAvg = round1(st.DropAvgPct())
 		d.SessCleanPct = round1(st.CleanPct())
+		d.SessDegradedPct = round1(st.DegradedPct())
+		d.SessDarkPct = round1(st.DarkPct())
 		d.SessOutages = st.Outages()
 		d.SessOutageSeconds = st.OutageSeconds
 		d.SessLongestOutage = st.LongestOutage()
@@ -236,6 +242,17 @@ func toMbps(v []float64) []float64 {
 }
 
 func round1(v float64) float64 { return float64(int(v*10+0.5)) / 10 }
+
+// deviceID returns the dish's own identifier, falling back to the hardware
+// version on firmware that doesn't report one. These were previously the same
+// value: the DTO fed "deviceId" from HardwareVersion, so the app's device ID and
+// its hardware label were one model string wearing two hats.
+func deviceID(s *dish.Status) string {
+	if s.DeviceInfo.Id != "" {
+		return s.DeviceInfo.Id
+	}
+	return s.DeviceInfo.HardwareVersion
+}
 
 func hardwareShort(hw string) string {
 	l := strings.ToLower(hw)
