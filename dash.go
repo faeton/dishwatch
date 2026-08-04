@@ -156,13 +156,34 @@ func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now 
 				lastCur = cur
 			}
 		} else {
-			// First observation without a reboot and without a prior cursor.
+			// A same-boot snapshot exists but carries no cursor — written by
+			// the bash `sl`, or by a build predating this accumulator. We used
+			// to just adopt the cursor and integrate nothing, which threw away
+			// every sample the ring still held and started the Wh total at
+			// zero mid-boot. Bootstrap from the ring exactly as the reboot
+			// path does, so this agrees with integrateStats, which bootstraps
+			// whenever it has no samples.
+			nb := uptime
+			if nb > ringLen {
+				nb = ringLen
+			}
+			if nb > cur {
+				nb = cur
+			}
+			var joules float64
+			for i := cur - nb; i < cur; i++ {
+				joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
+			}
+			energyWh += joules / 3600
 			lastCur = cur
 			if obsStartTs == 0 {
-				obsStartTs = now
+				obsStartTs = now - nb
 			}
 			if obsStartUp == 0 {
-				obsStartUp = uptime
+				obsStartUp = uptime - nb
+				if obsStartUp < 0 {
+					obsStartUp = 0
+				}
 			}
 		}
 	}
@@ -317,7 +338,9 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 	Rcol = append(Rcol, sec("↕", "Throughput"))
 
 	Lcol = append(Lcol, fmt.Sprintf("%sState   %s %s%s%s", ui.Lbl, ui.Rst, ui.Val, state, ui.Rst))
-	Rcol = append(Rcol, fmt.Sprintf("%sDown    %s %s  %s%.2f Mbps%s",
+	// DL/UL rather than Down/Up: "Up" sits two lines from an uptime figure and
+	// reads as one.
+	Rcol = append(Rcol, fmt.Sprintf("%sDL      %s %s  %s%.2f Mbps%s",
 		ui.Lbl, ui.Rst, ui.Bar(dnBarPct, L.BarW, ""), ui.Val, downMbps, ui.Rst))
 
 	readyShort := ui.OK + "✓ all" + ui.Rst
@@ -326,7 +349,7 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 	}
 	Lcol = append(Lcol, fmt.Sprintf("%sReady   %s %s  %s%s%s",
 		ui.Lbl, ui.Rst, readyShort, ui.Dim, readyKeysCompact(s.ReadyStates), ui.Rst))
-	Rcol = append(Rcol, fmt.Sprintf("%sUp      %s %s  %s%.2f Mbps%s",
+	Rcol = append(Rcol, fmt.Sprintf("%sUL      %s %s  %s%.2f Mbps%s",
 		ui.Lbl, ui.Rst, ui.Bar(upBarPct, L.BarW, ""), ui.Val, upMbps, ui.Rst))
 
 	Lcol = append(Lcol, fmt.Sprintf("%sPing    %s %s%.1f ms%s  %sdrop %.1f%%%s",
@@ -469,9 +492,9 @@ func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 		ui.Lbl, ui.OK, ui.Spark(pings, 0), ui.Rst, ui.Dim, pingAvg, pingP95, ui.Rst)
 	fmt.Fprintf(w, "  %sDrop  %s%s%s  %sper-second loss · peak %.1f%%%s\n",
 		ui.Lbl, ui.Err, ui.Spark(drops, 0), ui.Rst, ui.Dim, dropMax, ui.Rst)
-	fmt.Fprintf(w, "  %sDown  %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
+	fmt.Fprintf(w, "  %sDL    %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
 		ui.Lbl, ui.OK, ui.Spark(dn, 0), ui.Rst, ui.Dim, dnNow, dnMax, ui.Rst)
-	fmt.Fprintf(w, "  %sUp    %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
+	fmt.Fprintf(w, "  %sUL    %s%s%s  %snow %.2f · peak %.2f Mbps%s\n",
 		ui.Lbl, ui.OK, ui.Spark(up, 0), ui.Rst, ui.Dim, upNow, upMax, ui.Rst)
 
 	if len(pw) > 0 && maxf(pw) > 0 {
@@ -513,8 +536,9 @@ func renderObserved(w io.Writer, L ui.Layout) {
 	// reported as clean-second share plus outage events, because on a moving
 	// dish the distribution is bimodal and its mean names a state that never
 	// happened. See docs/macos-ui.md.
-	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · %.1f%% clean seconds%s\n",
-		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(), st.CleanPct(), ui.Rst)
+	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · %.0f%% clean · %.0f%% degraded · %.0f%% dark%s\n",
+		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(),
+		st.CleanPct(), st.DegradedPct(), st.DarkPct(), ui.Rst)
 	if n := st.Outages(); n > 0 {
 		fmt.Fprintf(w, "  %sOutage%s %s%d · %s dark · longest %s%s\n",
 			ui.Lbl, ui.Rst, ui.Dim, n,
