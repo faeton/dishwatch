@@ -7,17 +7,30 @@
 
 ## Correctness — fix regardless of architecture
 
-- [ ] **The state transaction is not serialized.** `state.Save` uses
-  temp-plus-rename, which is atomic but not *exclusive*. The real bug is that
-  load → integrate → save can interleave across processes, so two readers
-  consume the same `lastCurrent` cursor and **double-count energy**. Locking
-  only the write does not fix it — the whole sequence must hold the lock.
-  **This is live now**, not hypothetical: the app polls `dishwatch json` at 1 Hz
-  against the same `~/.cache/sl/state.json` the CLI uses, so running `sl watch`
-  with the app open is enough to corrupt the energy total.
+- [ ] **The state transaction is not serialized — and it now spans two files.**
+  Both `state.Save` and `SaveStats` use temp-plus-rename, which is atomic but
+  not *exclusive*. The real bug is that load → integrate → save can interleave
+  across processes, so two readers consume the same `lastCurrent` cursor and
+  **double-count**. Locking only the writes does not fix it — the whole
+  sequence must hold the lock. **This is live now**, not hypothetical: the app
+  polls `dishwatch json` at 1 Hz against the same files the CLI uses, so
+  running `sl watch` with the app open is enough to corrupt the totals.
+
+  `snapshotAndLog` now performs **two** independent read-integrate-write
+  transactions per poll — `state.json` via `integrateEnergy`, then `stats.json`
+  via `integrateStats` — each with its own cursor. Independent cursors are the
+  right design for crash-safety *within* a process (either file can be written
+  without desyncing the other), but across processes they can still diverge,
+  because a competing poll can land in the window between the two. The lock
+  belongs around `snapshotAndLog` as a unit.
 - [ ] **First-observation energy undercount** in `dash.go integrateEnergy`. A
   non-reboot first poll sets the cursor but integrates zero history; bootstrap
-  with `min(uptime, ringLen, cur)` like the reboot path does.
+  with `min(uptime, ringLen, cur)` like the reboot path does. This is now a
+  **consistency** bug too, not only an undercount: `integrateStats` already
+  bootstraps from the ring on first observation, so until the energy path
+  matches, `obsSeconds` and `energyWhSinceBoot` are computed over different
+  sample sets on the first poll — and `sessPowerAvg` × `obsSeconds` won't
+  reconcile with `energyWhSinceBoot`.
 - [ ] **No tests anywhere.** `integrateEnergy` and `History.LastN/Latest` are
   pure and the most error-prone code in the repo. A wrong cursor ships silent
   Wh lies for weeks with nothing to catch it. Table tests (reboot mid-ring,
@@ -38,6 +51,18 @@
   in the UI as live data with the footer still reading "live". Missing fields
   must degrade to an explicit unknown. Resilient decoding was meant to survive
   firmware changes; as written it hides them.
+
+  **This blocks [macos-ui.md](macos-ui.md).** That doc's session footer relies
+  on zero meaning "fewer than 120 samples — hide the row", and instructs that
+  the new `obs*`/`sess*` fields decode "resiliently like the rest". Those two
+  cannot both hold: inheriting mockup defaults means a CLI that omits the
+  fields renders invented statistics under the label `Observed`, the word the
+  doc designates as its honesty claim. Version skew here is expected, not
+  theoretical — `LiveProvider` prefers a repo dev build over Homebrew precisely
+  because the CLI and app drift. Minimum fix: these fields default to zero and
+  `SampleProvider` populates them explicitly. `DishData` currently conflates
+  "sample data" with "decode fallback"; the session fields are where that stops
+  being untidy and starts being dishonest.
 - [ ] **`deviceId` is mislabeled.** It's filled from
   `DeviceInfo.HardwareVersion` — the same source as `hardwareShort` — so the
   popover's "device ID" is really a hardware model string

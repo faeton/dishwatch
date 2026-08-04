@@ -98,7 +98,8 @@ Go core "for dishkit" before it either — extract it because the CLI needs it
 | **2** | **Decision spike** — sandboxed local-network reachability, Option A vs B | **Go/no-go on architecture** |
 | **3** | Persistent engine behind `DishProvider`; delete the subprocess | |
 | **4** | Adaptive polling, split RPCs, idle cost near zero | |
-| **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | |
+| **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | Precondition for the `Observed` row below |
+| **5a** | Metric presentation per [macos-ui.md](macos-ui.md) — session footer, peaks over means | Needs 5, or a zero-default carve-out |
 | **6** | Store prep: trademark/disclaimer copy, privacy label, screenshots, 1024 icon, privacy policy URL | |
 | **7** | Submission + App Review | |
 | **8** | *(optional)* notarized direct build via `cmd/dishwatchd`; Windows tray | |
@@ -111,16 +112,29 @@ Phase 0 and Phase 1 are independent and can run in parallel.
    (reboot mid-ring, gap > ring, cursor jump, all-zero `powerIn`, first
    observation) and `History.LastN/Latest`. These are pure, error-prone, and
    currently untested. A wrong energy cursor ships silent Wh lies for weeks.
-2. **Serialize the whole state transaction, not just the write.** `Save` uses
-   temp-plus-rename, which is atomic but not exclusive. The bug is that
+2. **Serialize the whole of `snapshotAndLog`, not just the writes — and note it
+   now covers two files.** Both `state.Save` and `SaveStats` use
+   temp-plus-rename, which is atomic but not *exclusive*. The bug is that
    load → integrate → save can interleave between processes, so two readers
-   consume the same `lastCurrent` cursor and double-count energy. A lock around
-   `Save` alone does not fix this; the read-integrate-write sequence must hold
-   the lock. This is live today: the app polls at 1 Hz against the same
-   `state.json` the CLI uses.
+   consume the same `lastCurrent` cursor and double-count. A lock around each
+   write does not fix this; the read-integrate-write sequence must hold it.
+   This is live today: the app polls at 1 Hz against the same files the CLI
+   uses.
+
+   The session accumulator makes this sharper. `snapshotAndLog` now runs *two*
+   independent transactions per poll (`state.json` via `integrateEnergy`, then
+   `stats.json` via `integrateStats`), each with its own cursor. Separate
+   cursors correctly prevent desync *within* a process when only one file gets
+   written — but across processes with no lock they can still diverge, because
+   another poll can land between the two transactions. So the lock belongs
+   around `snapshotAndLog` as a whole, not around either accumulator
+   individually.
 3. **First-observation energy bootstrap** — a non-reboot first poll sets the
    cursor but integrates zero history; bootstrap with `min(uptime, ringLen,
-   cur)` like the reboot path.
+   cur)` like the reboot path. Note this is now also a *consistency* fix, not
+   just an undercount: `integrateStats` already bootstraps from the ring on
+   first observation, so until `integrateEnergy` matches, the first poll
+   computes `obsSeconds` and `energyWhSinceBoot` over different sample sets.
 4. **Thread `StorageDir`** as a parameter; default `os.UserCacheDir()`. Kills
    the `~/.cache/sl` hardcode. Accept that this ends on-disk state sharing with
    the bash `sl` — under the sandbox it ends anyway.
@@ -131,9 +145,34 @@ Phase 0 and Phase 1 are independent and can run in parallel.
 6. **Watch reconnect race** (`watch.go` ~119) — CLI-only pain; fix it here but
    don't let it block the app track.
 
-Metric presentation (which statistic, which window, exact label strings) is
-settled separately in [macos-ui.md](macos-ui.md) — the Go side already emits the
-data; the Swift views have not been updated yet.
+### Ordering trap: macos-ui.md must not ship before the decoder fix
+
+Metric presentation — which statistic, which window, exact label strings — is
+settled separately in [macos-ui.md](macos-ui.md). The Go side already emits the
+data (gated on `Stats.Ready()`, ≥120 samples; **zero is the contract for "not
+enough data, hide the footer"**). The Swift views have not been updated yet.
+
+**Implementing that doc as written would make the `Observed` row lie.** It says
+to add the `obs*`/`sess*` fields so they "decode resiliently like the rest" —
+but "like the rest" means falling back to `DishData`'s memberwise defaults,
+which are the *design mockup numbers*. Two things then break at once:
+
+1. The zero-means-hide cue is destroyed — a missing field decodes to a nonzero
+   default, so the footer renders.
+2. It renders **fabricated session statistics under the word "Observed"**,
+   which macos-ui.md explicitly designates as the disclaimer that carries the
+   whole honesty claim.
+
+This is not hypothetical version skew: `app/README.md` already warns that a
+Homebrew `dishwatch` predating the `json` command won't work, and
+`LiveProvider` deliberately prefers a repo dev build over Homebrew *because*
+the two drift. An older CLI omitting `sess*` is exactly the expected failure.
+
+So either fix the decoder first (Phase 5), or — cheaper — make these specific
+fields default to **zero** and have `SampleProvider` populate them explicitly
+rather than inheriting struct defaults. Sample data and decode fallbacks are
+two different jobs that `DishData` currently conflates; the session fields are
+where that conflation becomes dishonest rather than merely untidy.
 
 ## Phase 1 — the `.app` bundle
 
