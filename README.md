@@ -182,6 +182,13 @@ Config lives in `.goreleaser.yaml`. To change what's shipped (add a build target
 tweak the description, etc.) edit that file and re-run `make publish-dry` to
 preview the generated formula in `dist/homebrew/Formula/dishwatch.rb`.
 
+## Roadmap
+
+A native macOS menu-bar app (App Store first) is planned — see
+[`docs/roadmap.md`](docs/roadmap.md) for the architecture and phased plan, and
+[`docs/optimizations.md`](docs/optimizations.md) for the review findings and
+cleanup backlog that Phase 0 works through.
+
 ## License
 
 MIT
