@@ -99,4 +99,3 @@ func joinActiveAlerts(m map[string]bool) string {
 	sort.Strings(active)
 	return strings.Join(active, ", ")
 }
-

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	spinnerFPS = 5                      // ticks per second while waiting
+	spinnerFPS = 5 // ticks per second while waiting
 	spinGlyphs = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 )
 
@@ -196,4 +196,3 @@ func runWatch(ctx context.Context, every int) error {
 		spin.Stop()
 	}
 }
-

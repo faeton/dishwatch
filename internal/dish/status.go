@@ -18,22 +18,22 @@ type Status struct {
 	DeviceState struct {
 		UptimeS int64 `json:"uptimeS,string"`
 	} `json:"deviceState"`
-	State                  string  `json:"state"`
-	ClassOfService         string  `json:"classOfService"`
-	MobilityClass          string  `json:"mobilityClass"`
-	SoftwareUpdateState    string  `json:"softwareUpdateState"`
-	EthSpeedMbps           int     `json:"ethSpeedMbps"`
-	DownlinkThroughputBps  float64 `json:"downlinkThroughputBps"`
-	UplinkThroughputBps    float64 `json:"uplinkThroughputBps"`
-	PopPingLatencyMs       float64 `json:"popPingLatencyMs"`
-	PopPingDropRate        float64 `json:"popPingDropRate"`
-	IsSnrAboveNoiseFloor   bool    `json:"isSnrAboveNoiseFloor"`
-	IsSnrPersistentlyLow   bool    `json:"isSnrPersistentlyLow"`
-	BoresightAzimuthDeg    float64 `json:"boresightAzimuthDeg"`
-	BoresightElevationDeg  float64 `json:"boresightElevationDeg"`
-	DlBandwidthRestricted  string  `json:"dlBandwidthRestrictedReason"`
-	UlBandwidthRestricted  string  `json:"ulBandwidthRestrictedReason"`
-	DisablementCode        string  `json:"disablementCode"`
+	State                 string  `json:"state"`
+	ClassOfService        string  `json:"classOfService"`
+	MobilityClass         string  `json:"mobilityClass"`
+	SoftwareUpdateState   string  `json:"softwareUpdateState"`
+	EthSpeedMbps          int     `json:"ethSpeedMbps"`
+	DownlinkThroughputBps float64 `json:"downlinkThroughputBps"`
+	UplinkThroughputBps   float64 `json:"uplinkThroughputBps"`
+	PopPingLatencyMs      float64 `json:"popPingLatencyMs"`
+	PopPingDropRate       float64 `json:"popPingDropRate"`
+	IsSnrAboveNoiseFloor  bool    `json:"isSnrAboveNoiseFloor"`
+	IsSnrPersistentlyLow  bool    `json:"isSnrPersistentlyLow"`
+	BoresightAzimuthDeg   float64 `json:"boresightAzimuthDeg"`
+	BoresightElevationDeg float64 `json:"boresightElevationDeg"`
+	DlBandwidthRestricted string  `json:"dlBandwidthRestrictedReason"`
+	UlBandwidthRestricted string  `json:"ulBandwidthRestrictedReason"`
+	DisablementCode       string  `json:"disablementCode"`
 
 	ObstructionStats struct {
 		FractionObstructed float64 `json:"fractionObstructed"`
