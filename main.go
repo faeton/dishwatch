@@ -72,6 +72,10 @@ func main() {
 		if err := runSpeed(ctx); err != nil {
 			die(err)
 		}
+	case "json":
+		if err := runJSON(ctx); err != nil {
+			die(err)
+		}
 	case "pb":
 		if err := runPb(ctx, os.Args[2:]); err != nil {
 			die(err)
@@ -106,7 +110,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|history|location|loc|map|reboot|raw '<json>'|speed|pb [pct [wh] | -]]")
+	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|history|location|loc|map|reboot|raw '<json>'|speed|pb [pct [wh] | -]|json]")
 	fmt.Fprintln(os.Stderr, "       (more commands coming — bash `sl` still has the full set)")
 }
 
