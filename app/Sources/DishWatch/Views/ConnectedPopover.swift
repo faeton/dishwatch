@@ -160,8 +160,19 @@ struct ConnectedPopover: View {
     }
 
     private var footer: some View {
-        let status: String = !store.hasLoaded ? "connecting…" : (store.lastError == nil ? "live" : "stale")
-        let live = store.lastError == nil && store.hasLoaded
+        // Sample mode has to say so here, not only in Settings. Without the CLI
+        // the app still renders a complete, plausible dashboard, and a footer
+        // reading "live" over mockup numbers is the same class of lie as a
+        // missing field decoding to a design constant.
+        let status: String
+        if !store.isLive {
+            status = "sample data — no dishwatch CLI found"
+        } else if !store.hasLoaded {
+            status = "connecting…"
+        } else {
+            status = store.lastError == nil ? "live" : "stale"
+        }
+        let live = store.isLive && store.lastError == nil && store.hasLoaded
         return HStack {
             Text("\(d.dishAddr) · \(status)")
                 .font(.system(size: 11)).monospacedDigit()

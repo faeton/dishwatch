@@ -52,10 +52,14 @@ final class LiveProvider: DishProvider, @unchecked Sendable {
         if let env = ProcessInfo.processInfo.environment["DISHWATCH_BIN"], !env.isEmpty {
             candidates.append(env)
         }
-        // Prefer a local repo dev build (this machine) over a possibly-stale
-        // Homebrew install that may predate the `json` command.
+        #if DEBUG
+        // Dev convenience only: prefer the repo build over a possibly-stale
+        // Homebrew install that may predate the `json` command. Must not ship —
+        // a release build that found a developer's checkout on a user's machine
+        // would silently run an unknown binary.
+        candidates.append(fm.homeDirectoryForCurrentUser.path + "/Sites/dishwatch/bin/dishwatch")
+        #endif
         candidates += [
-            (fm.homeDirectoryForCurrentUser.path) + "/Sites/dishwatch/bin/dishwatch",
             "/opt/homebrew/bin/dishwatch",
             "/usr/local/bin/dishwatch",
         ]
