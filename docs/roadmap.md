@@ -168,11 +168,28 @@ Homebrew `dishwatch` predating the `json` command won't work, and
 `LiveProvider` deliberately prefers a repo dev build over Homebrew *because*
 the two drift. An older CLI omitting `sess*` is exactly the expected failure.
 
-So either fix the decoder first (Phase 5), or — cheaper — make these specific
-fields default to **zero** and have `SampleProvider` populate them explicitly
-rather than inheriting struct defaults. Sample data and decode fallbacks are
-two different jobs that `DishData` currently conflates; the session fields are
-where that conflation becomes dishonest rather than merely untidy.
+Sample data and decode fallbacks are two different jobs that `DishData`
+conflates; the session fields are where that becomes dishonest rather than
+merely untidy.
+
+**Fix: decode the block atomically and fail closed** — one optional
+`ObservedStats?` rather than ten individually-defaulted scalars. Per-field zero
+defaults are not enough; they cover the all-absent case but still render
+`peak ↓0 · 0 W` when a single key is missing while `obsSeconds` is present.
+Absent `obsSeconds`, or `< 120`, or any rendered field missing or wrong-typed →
+`nil` → hide the footer. `SampleProvider` builds the block explicitly. Scoped
+to one struct, so it does not block on the full Phase 5 rework.
+
+Two more things must be settled before this row ships:
+
+- **macos-ui.md's own invariant is currently violated.** It says never backfill
+  the ring beyond the initial bootstrap, but `integrateStats` folds in any
+  cursor gap that fits within the ring — so quitting the app for ten minutes
+  counts ~600 unobserved samples as observed, while the tooltip promises
+  "gaps while quit are excluded." Either clamp the fold to samples postdating
+  `LastTs`, or change the copy. See [optimizations.md](optimizations.md).
+- **`CompactWidget` cold start is unspecified.** Define the not-ready string —
+  `—`, never `peak 0`, and never a silent fall back to the 60 s mean.
 
 ## Phase 1 — the `.app` bundle
 

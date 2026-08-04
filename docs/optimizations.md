@@ -23,14 +23,41 @@
   without desyncing the other), but across processes they can still diverge,
   because a competing poll can land in the window between the two. The lock
   belongs around `snapshotAndLog` as a unit.
-- [ ] **First-observation energy undercount** in `dash.go integrateEnergy`. A
-  non-reboot first poll sets the cursor but integrates zero history; bootstrap
-  with `min(uptime, ringLen, cur)` like the reboot path does. This is now a
-  **consistency** bug too, not only an undercount: `integrateStats` already
-  bootstraps from the ring on first observation, so until the energy path
-  matches, `obsSeconds` and `energyWhSinceBoot` are computed over different
-  sample sets on the first poll — and `sessPowerAvg` × `obsSeconds` won't
-  reconcile with `energyWhSinceBoot`.
+- [ ] **First-observation energy undercount** in `dash.go integrateEnergy` —
+  narrower than previously described here. `prev == nil` *does* bootstrap (it
+  is folded into `reboot`). The actual hole is the final `else` branch: a
+  **same-boot snapshot that exists but carries `LastCurrent == 0`** advances
+  the cursor and integrates zero joules. That is reachable from a `state.json`
+  written by the bash `sl`, or by a Go build predating the energy accumulator.
+  Bootstrap it with `min(uptime, ringLen, cur)` like the reboot path.
+
+  It is now a **consistency** bug as well: `integrateStats` bootstraps from the
+  ring whenever `Samples == 0`, so in that path session stats fold in ring
+  history the energy accumulator skips, and the two cover different sample
+  windows. Note the obvious cross-check does **not** work even when they agree:
+  `sessPowerAvg` excludes zero-power samples (`PowerSum/PowerCount`) while
+  `obsSeconds` counts every sample, so `sessPowerAvg × obsSeconds / 3600` is by
+  design not equal to `energyWhSinceBoot`. Don't use it as a test oracle —
+  assert the shared bootstrap rule directly instead. Add tests for **both**
+  `prev == nil` and existing-snapshot-with-zero-cursor; they are different
+  paths and were previously lumped under one "first observation" label.
+- [ ] **Atomic-rename writes collide under concurrency.** Every writer uses a
+  fixed temp name — `p + ".tmp"` in `state.Save` (store.go:108), the events log
+  (store.go:287), and `SaveStats` (stats.go). Two processes writing the same
+  file at once therefore interleave into the *same* temp path before renaming,
+  so "atomic" holds only for a single writer. Use a unique temp name
+  (`os.CreateTemp` in the target dir) as well as the transaction lock. All save
+  errors are also silently discarded (`_ = state.Save(...)`).
+- [ ] **The bash `sl` is a third writer.** `sl` (still in the repo, 41 KB)
+  writes the same `~/.cache/sl/state.json` with no lock, so a Go-side `flock`
+  coordinates the Go CLI and the app but not bash. Either teach `sl` the lock
+  or retire the shared path — the `StorageDir`/`UserCacheDir` move does the
+  latter by default.
+- [ ] **The read side needs the lock too.** `buildDashboard` calls `LoadStats`
+  and `state.Load` as two separate reads, so a poll landing between them
+  produces a DTO mixing generation N stats with generation N−1 energy. Either
+  share the lock on read, or have the transaction hand both snapshots back
+  directly (which also fixes `renderEnergy` re-reading what was just written).
 - [ ] **No tests anywhere.** `integrateEnergy` and `History.LastN/Latest` are
   pure and the most error-prone code in the repo. A wrong cursor ships silent
   Wh lies for weeks with nothing to catch it. Table tests (reboot mid-ring,
@@ -59,10 +86,39 @@
   fields renders invented statistics under the label `Observed`, the word the
   doc designates as its honesty claim. Version skew here is expected, not
   theoretical — `LiveProvider` prefers a repo dev build over Homebrew precisely
-  because the CLI and app drift. Minimum fix: these fields default to zero and
-  `SampleProvider` populates them explicitly. `DishData` currently conflates
-  "sample data" with "decode fallback"; the session fields are where that stops
-  being untidy and starts being dishonest.
+  because the CLI and app drift. `DishData` currently conflates "sample data"
+  with "decode fallback"; the session fields are where that stops being untidy
+  and starts being dishonest.
+
+  **Fix: decode the block atomically, fail closed** — a single optional
+  `ObservedStats?`, not ten individually-defaulted scalars. Zero defaults per
+  field are *not* enough: they handle the all-absent case but still render
+  `peak ↓0 · 0 W` if one key is missing or mistyped while `obsSeconds` is
+  present. Rule: absent `obsSeconds`, or `< 120`, or any rendered field missing
+  or wrong-typed → `nil` → hide the whole footer. `SampleProvider` constructs
+  the block explicitly. This is scoped to one struct, so it does **not** have
+  to wait on the full strict-decode/`schemaVersion` rework. Also fix
+  macos-ui.md's "Files to change" row so it stops saying "like the rest", and
+  define the `CompactWidget` cold-start string — `—`, never `peak 0` and never
+  a silent fall back to the 60 s mean.
+- [ ] **`integrateStats` backfills across gaps, which contradicts what the
+  footer claims.** [macos-ui.md](macos-ui.md) lists two invariants that "must
+  hold or the word becomes a lie", the second being *"never backfill the dish's
+  15-minute ring into the session figures beyond the initial bootstrap."* The
+  non-reboot path does exactly that: `n = cur - st.LastCurrent`, and any gap
+  **within** the ring is folded in wholesale. Only gaps larger than the ring
+  are dropped (`n > ringLen → n = 0`). So quitting DishWatch for ten minutes
+  and reopening silently counts ~600 unobserved samples as observed — while the
+  footer tooltip reads *"Stats cover time DishWatch was running. Gaps while
+  quit are excluded."* That is false for every gap under 15 minutes, which is
+  the common case, not an edge case.
+
+  Decide which way to resolve it before shipping the row: either clamp the
+  non-reboot fold to samples that postdate `LastTs` (behavior matches the
+  claim), or rewrite the copy to admit that up to 15 minutes of dish-recorded
+  history is included (claim matches behavior). The current pairing is the one
+  combination that isn't defensible, and it undercuts the whole reason the word
+  "Observed" was chosen over "Session".
 - [ ] **`deviceId` is mislabeled.** It's filled from
   `DeviceInfo.HardwareVersion` — the same source as `hardwareShort` — so the
   popover's "device ID" is really a hardware model string
