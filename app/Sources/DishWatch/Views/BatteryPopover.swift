@@ -1,0 +1,131 @@
+import SwiftUI
+
+/// Screen B — on battery. The power bank is the hero: big %, time-to-empty,
+/// power facts, draw sparkline, condensed link state.
+struct BatteryPopover: View {
+    var d: DishData
+    @Binding var showSettings: Bool
+    @EnvironmentObject var store: AppState
+    @State private var showSetup = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            hero
+            facts.padding(.horizontal, 16)
+            drawRow
+            linkState.padding(.horizontal, 16).padding(.top, 8)
+            footer
+        }
+        .foregroundStyle(DW.text)
+        .overlay(TopGlow(color: DW.amber, height: 120), alignment: .top)
+        .sheet(isPresented: $showSetup) { BatterySetupSheet(d: d).frame(width: 392) }
+    }
+
+    private var header: some View {
+        HStack {
+            HStack(spacing: 8) {
+                BatteryGlyph(fraction: d.bankPct / 100, color: DW.amber, width: 24, height: 12)
+                Text("On battery").font(.system(size: 14, weight: .bold))
+            }
+            Spacer()
+            Text(Date.now, format: .dateTime.hour().minute().second())
+                .font(.system(size: 12)).monospacedDigit().foregroundStyle(DW.textA(0.5))
+            AppMenuButton(showSettings: $showSettings, refresh: { Task { await store.refresh() } })
+        }
+        .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 8)
+    }
+
+    private var hero: some View {
+        VStack(spacing: 0) {
+            Text("POWER BANK").font(.system(size: 13, weight: .semibold)).tracking(0.5)
+                .foregroundStyle(DW.amber.opacity(0.9))
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(Int(d.bankPct))").font(.system(size: 58, weight: .heavy)).monospacedDigit()
+                Text("%").font(.system(size: 26, weight: .semibold)).foregroundStyle(DW.textA(0.6))
+            }
+            .padding(.top, 6)
+            // big bar
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.08))
+                .frame(maxWidth: 300).frame(height: 16)
+                .overlay(
+                    GeometryReader { g in
+                        RoundedRectangle(cornerRadius: 6).fill(DW.amberFill)
+                            .padding(2.5)
+                            .frame(width: (g.size.width) * d.bankPct / 100)
+                    }, alignment: .leading)
+                .padding(.top, 16)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("dies in").font(.system(size: 12)).foregroundStyle(DW.textA(0.5))
+                timeToEmpty
+            }
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 18)
+    }
+
+    private var timeToEmpty: some View {
+        let h = d.bankSecondsLeft / 3600
+        let m = (d.bankSecondsLeft % 3600) / 60
+        return (
+            Text("\(h)").font(.system(size: 30, weight: .bold)).monospacedDigit()
+            + Text("h ").font(.system(size: 17, weight: .semibold)).foregroundColor(DW.textA(0.6))
+            + Text("\(m)").font(.system(size: 30, weight: .bold)).monospacedDigit()
+            + Text("m").font(.system(size: 17, weight: .semibold)).foregroundColor(DW.textA(0.6))
+        )
+    }
+
+    private var facts: some View {
+        HStack(spacing: 1) {
+            fact(String(format: "%.1f", d.powerW), "watts now")
+            fact(String(format: "%.1f", d.bankWhLeft), "Wh left")
+            fact("\(Int(d.bankWh))", "bank Wh")
+        }
+        .background(Color.white.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func fact(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.system(size: 17, weight: .bold)).monospacedDigit()
+            Text(label).font(.system(size: 10)).foregroundStyle(DW.textA(0.45))
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 11)
+        .background(DW.cellBG.opacity(0.8))
+    }
+
+    private var drawRow: some View {
+        HStack(spacing: 11) {
+            Text("draw").font(.system(size: 11)).foregroundStyle(DW.textA(0.5)).frame(width: 38, alignment: .leading)
+            Spark(values: d.powerSeries, color: DW.amber).frame(height: 22)
+            Text("avg \(d.powerAvg, specifier: "%.1f")").font(.system(size: 11)).monospacedDigit()
+                .foregroundStyle(DW.textA(0.45)).frame(width: 52, alignment: .trailing)
+        }
+        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+    }
+
+    private var linkState: some View {
+        let stats = ["\(Int(d.downMbps)) Mbps", "\(Int(d.pingMs)) ms", "sig \(d.signalScore)"]
+        return HStack(spacing: 9) {
+            StatusDot(color: d.state == .connected ? DW.green : DW.amber, size: 8, pulse: false)
+            Text(d.stateLabel).font(.system(size: 12, weight: .semibold))
+            ForEach(stats, id: \.self) { s in
+                Text("·").foregroundStyle(DW.textA(0.4))
+                Text(s).font(.system(size: 12)).foregroundStyle(DW.textA(0.62))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    private var footer: some View {
+        HStack {
+            Text("anchored \(d.anchoredAgoText)").font(.system(size: 11)).foregroundStyle(DW.textA(0.4))
+            Spacer()
+            DWButton(title: "Adjust bank…") { showSetup = true }
+        }
+        .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 15)
+    }
+}
