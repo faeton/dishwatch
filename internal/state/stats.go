@@ -78,6 +78,11 @@ const StatsVersion = 2
 // OutageThreshold is the drop rate at or above which a second counts as an
 // outage. Not 1.0: a second at 95% loss is unusable in practice, and treating
 // it as merely "degraded" would undercount short tunnels.
+//
+// It is deliberately left strict rather than lowered to catch the 50–90% band.
+// Any single cutoff misplaces seconds near it, so the fix is to report the
+// degraded band explicitly (see DegradedPct) instead of hiding the choice
+// inside a threshold nobody can see.
 const OutageThreshold = 0.9
 
 func statsPath() (string, error) {
@@ -126,11 +131,7 @@ func SaveStats(s *Stats) error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	return writeFileAtomic(p, b, 0o644)
 }
 
 // ----- derived values -----
@@ -178,13 +179,44 @@ func (s *Stats) DropAvgPct() float64 {
 
 func (s *Stats) DropMaxPct() float64 { return s.DropMax * 100 }
 
-// CleanPct is the share of observed seconds with no packet loss at all — the
-// honest headline for a link that is either fine or dark.
+// CleanPct is the share of observed seconds with no packet loss at all.
+//
+// Reported alongside DegradedPct and DarkPct rather than on its own: measured
+// on a moving dish, the seconds that are neither clean nor dark are not "almost
+// clean" — 72% of that band sat at 20–90% loss, i.e. genuinely unusable. A
+// two-way clean/dark split therefore reads as if everything not clean were a
+// tunnel, when a third of it is partial obstruction.
 func (s *Stats) CleanPct() float64 {
 	if s.Samples == 0 {
 		return 0
 	}
 	return float64(s.CleanSeconds) / float64(s.Samples) * 100
+}
+
+// DegradedSeconds is observed time with some loss but below OutageThreshold —
+// the band between "fine" and "dark". Derived rather than accumulated, so it
+// cannot disagree with its two neighbours.
+func (s *Stats) DegradedSeconds() int64 {
+	d := s.Samples - s.CleanSeconds - s.OutageSeconds
+	if d < 0 {
+		return 0 // defensive: a truncated file should not print a negative
+	}
+	return d
+}
+
+func (s *Stats) DegradedPct() float64 {
+	if s.Samples == 0 {
+		return 0
+	}
+	return float64(s.DegradedSeconds()) / float64(s.Samples) * 100
+}
+
+// DarkPct is the share of observed seconds at or above OutageThreshold.
+func (s *Stats) DarkPct() float64 {
+	if s.Samples == 0 {
+		return 0
+	}
+	return float64(s.OutageSeconds) / float64(s.Samples) * 100
 }
 
 // Outages counts completed outages plus one for a run still in progress, so a

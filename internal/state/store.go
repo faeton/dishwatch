@@ -43,17 +43,64 @@ type Snapshot struct {
 	ObsStartUptime int64   `json:"obsStartUptime"`
 }
 
-// CacheDir returns ~/.cache/sl, creating it if missing.
+// dirOverride, when non-empty, replaces the default cache location. It exists
+// so tests can point at a temp dir, and so a sandboxed host (the macOS app,
+// which cannot reach ~/.cache) can supply its own container path without this
+// package having to know anything about it.
+//
+// The default stays ~/.cache/sl rather than os.UserCacheDir() on purpose: the
+// bash `sl` hardcodes that path, and moving it silently would orphan existing
+// users' energy history. See docs/roadmap.md for the migration.
+var dirOverride string
+
+// SetDir overrides the cache directory for the life of the process. Pass "" to
+// restore the default.
+func SetDir(d string) { dirOverride = d }
+
+// CacheDir returns the storage directory, creating it if missing.
 func CacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	dir := dirOverride
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".cache", "sl")
 	}
-	dir := filepath.Join(home, ".cache", "sl")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	return dir, nil
+}
+
+// writeFileAtomic replaces path with data via a uniquely-named temp file in the
+// same directory.
+//
+// A fixed "<path>.tmp" name is not safe under concurrency even though the
+// rename itself is atomic: two processes writing at once open the *same* temp
+// path and interleave their bytes, so whichever renames second can publish a
+// blend of both. The transaction lock in lock.go makes that unreachable for Go
+// callers, but a unique name means a stray concurrent writer corrupts only its
+// own temp file rather than the file we are about to publish.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename succeeds
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func statePath() (string, error) {
@@ -105,11 +152,7 @@ func Save(s *Snapshot) error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	return writeFileAtomic(p, b, 0o644)
 }
 
 // LogEvent appends one line to events.log and rotates if it grows too large.
@@ -284,9 +327,5 @@ func rotateEvents(path string, keep int) error {
 		return nil
 	}
 	tail := lines[len(lines)-keep:]
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strings.Join(tail, "\n")+"\n"), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomic(path, []byte(strings.Join(tail, "\n")+"\n"), 0o644)
 }

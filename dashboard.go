@@ -159,6 +159,12 @@ func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr st
 		d.PowerAvg = round1(pwAvg)
 	}
 
+	// Read both persisted files under one shared lock: they are advanced by a
+	// single transaction, so loading them separately can otherwise straddle a
+	// commit and emit generation-N session stats beside generation-N-1 energy.
+	rtxn, _ := state.BeginRead()
+	defer rtxn.Close()
+
 	if st, _ := state.LoadStats(); st.Ready() {
 		d.ObsSeconds = st.ObservedSeconds()
 		d.ObsCoverage = st.Coverage()

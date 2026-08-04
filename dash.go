@@ -63,6 +63,15 @@ func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History
 // the energy accumulator from get_history.powerIn, writes transition events,
 // then replaces state.json.
 func snapshotAndLog(s *dish.Status, h *dish.History) {
+	// One lock for the whole poll. Both accumulators below are
+	// load→integrate→save against a monotonic cursor, so the exclusion has to
+	// span the sequence rather than the individual writes — and it has to span
+	// *both*, or a competing poll landing between them leaves state.json and
+	// stats.json describing different generations. Best-effort: if the lock
+	// can't be taken we still do the work, same as before it existed.
+	txn, _ := state.Begin()
+	defer txn.Close()
+
 	prev, _ := state.Load()
 	now := time.Now().Unix()
 	cur := &state.Snapshot{
