@@ -13,12 +13,12 @@ enum Render {
         guard let dir = ProcessInfo.processInfo.environment["DISHWATCH_RENDER"] else { return false }
         let store = AppState(provider: SampleProvider())
         store.seedSample()
-        var battery = DishData(); battery.onBattery = true; battery.bankAnchored = true
+        var battery = DishData.sample; battery.onBattery = true; battery.bankAnchored = true
 
         snap(ConnectedPopover(d: store.data, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
         snap(BatteryPopover(d: battery, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
-        snap(CompactWidget(d: DishData()), dir, "compact")
-        snap(BatterySetupSheet(d: DishData()), dir, "setup")
+        snap(CompactWidget(d: .sample), dir, "compact")
+        snap(BatterySetupSheet(d: .sample), dir, "setup")
         snap(SettingsView().environmentObject(store), dir, "settings")
 
         // Menu-bar glyphs: render each icon mode as the black-ink silhouette the

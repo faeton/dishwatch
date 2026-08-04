@@ -73,7 +73,7 @@ final class AppState: ObservableObject {
 
     /// One poll: fetch, apply demo override, keep last-good on failure.
     /// For the headless render path only: present sample data as if loaded.
-    func seedSample() { data = DishData(); hasLoaded = true }
+    func seedSample() { data = .sample; hasLoaded = true }
 
     func refresh() async {
         do {

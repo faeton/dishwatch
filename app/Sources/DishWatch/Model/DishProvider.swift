@@ -13,7 +13,7 @@ protocol DishProvider: Sendable {
 /// Deterministic sample data matching DishWatch.dc.html, with light per-tick
 /// jitter so sparklines/clock feel alive in a demo.
 final class SampleProvider: DishProvider, @unchecked Sendable {
-    private let base = DishData()
+    private let base = DishData.sample
     private var tick = 0
 
     func poll() async throws -> DishData {
