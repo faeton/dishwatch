@@ -8,6 +8,7 @@ SL_CACHE="$HOME/.cache/sl"
 SL_STATE="$SL_CACHE/state.json"
 SL_EVENTS="$SL_CACHE/events.log"
 SL_PB_ANCHOR="$SL_CACHE/pb.json"
+SL_LOCK="$SL_CACHE/.lock"
 # Power-bank model. Wh = dish-input energy per full 100% charge (calibrated
 # via bank-% vs integrated Wh). Override with env vars.
 SL_PB_WH="${SL_PB_WH:-}"
@@ -24,6 +25,65 @@ done
 unset _bin
 
 call() { grpcurl -plaintext -max-time 4 -d "$1" "$DISH" "$SVC"; }
+
+# ----- state transaction lock -----
+#
+# state.json is read-modify-write: read the previous energyWh and lastCurrent,
+# integrate the ring samples since that cursor, write the total back. Running
+# that sequence in two processes at once is not theoretical — the Go
+# `dishwatch` and the macOS app poll these same files while `sl watch` may be
+# running in a terminal.
+#
+# What that costs is subtler than it looks: both writers store an absolute
+# total, and energyWh travels in the same file as the cursor it belongs to, so
+# a stale write rewinds the pair together and the next poll re-integrates back
+# to roughly the right number. The damage is skew against stats.json, which the
+# Go side advances separately and nothing later reconciles, plus a permanent
+# undercount whenever a rewind lands further back than the dish's 15-minute
+# ring. See internal/state/lock.go.
+#
+# The Go side takes an advisory flock(2) on $SL_CACHE/.lock around the whole
+# sequence (internal/state/lock.go). flock only excludes other flock callers, so
+# this script has to take the *same* kind of lock on the *same* file to be part
+# of the same guarantee — a mkdir- or shlock-style lock would serialize this
+# script against itself and nothing else.
+#
+# macOS ships no flock(1), but /usr/bin/lockf uses "BSD-style locking as
+# described in flock(2)" and can lock an inherited descriptor, which is what
+# lets the lock outlive the helper and span a shell critical section. The lock
+# belongs to the open file description, so fd 9 staying open in this shell keeps
+# it held after lockf exits.
+_sl_lock() {
+  command -v lockf >/dev/null 2>&1 || return 0   # no lockf: unlocked, as before
+  exec 9>>"$SL_LOCK" || return 0
+  # Bounded wait: a wedged holder must not hang the CLI. On timeout we proceed
+  # unlocked rather than refusing to run — same best-effort posture as the Go
+  # side, which also continues if it cannot acquire.
+  if ! lockf -s -t 10 9; then
+    exec 9>&-
+    printf '\e[38;5;244msl: state lock busy — continuing unlocked\e[0m\n' >&2
+    return 0
+  fi
+}
+_sl_unlock() { exec 9>&- 2>/dev/null || true; }
+
+# Replace a file in one step. This matters more than the lock does.
+#
+# `printf ... > state.json` truncates at open, so the file is zero bytes until
+# printf runs. Measured on this machine, a reader polling against that writer
+# saw an empty state.json on 2980 of 9961 reads — 30%, not a narrow race. Go's
+# state.Load treats an empty file as "no prior snapshot", which sends
+# integrateEnergy down the bootstrap path: seeded with a real 14.45 Wh total,
+# one poll landing in that window rewrote it as 5.99 Wh. Silently, and with no
+# way to tell the reset from a reboot afterwards.
+#
+# Temp-plus-rename closes the window entirely (0 empty reads in 424815). The
+# temp name carries $$ so a stray concurrent writer corrupts its own scratch
+# file rather than the one we are about to publish.
+_sl_write_atomic() {
+  local path="$1" data="$2" tmp="$1.$$.tmp"
+  printf '%s' "$data" > "$tmp" && mv -f "$tmp" "$path"
+}
 
 # Humanize a duration in seconds as "1d 2h 3m 4s" (skip zero leading units).
 _sl_humanize_dur() {
@@ -108,7 +168,7 @@ _sl_diff_and_log() {
     [[ "$cr" != "$pr" ]] && _sl_log "READY"  "all-ready $pr → $cr"
     [[ "$ca" != "$pa" ]] && _sl_log "ALERTS" "$pa → $ca"
   fi
-  printf '%s' "$cur" > "$SL_STATE"
+  _sl_write_atomic "$SL_STATE" "$cur"
 }
 
 _sl_mark_unreachable() {
@@ -269,6 +329,14 @@ dash() {
   fi
 
   local NOW_TS; NOW_TS=$(date +%s)
+
+  # ---- state transaction ----
+  # Everything from here to _sl_diff_and_log is one read-modify-write over
+  # state.json. Holding the lock only around the write would not help: the
+  # double-count comes from two processes reading the same lastCurrent, not
+  # from their writes overlapping. See _sl_lock.
+  _sl_lock
+
   local PREV_BOOTS="" PREV_UPS="" PREV_ENERGY=0 PREV_LAST_CUR="" PREV_OBS_TS="" PREV_OBS_UP=""
   if [[ -s "$SL_STATE" ]]; then
     eval "$(jq -r '
@@ -337,6 +405,8 @@ dash() {
     --argjson obsStartTs "$OBS_START_TS" --argjson obsStartUptime "$OBS_START_UP" \
     '{ts:$ts, boots:($boots|tonumber), uptimeS:($uptimeS|tonumber), state:$state, disable:$disable, alerts:$alerts, ready_all:$ready_all, ping:$ping, drop:$drop, energyWh:$energyWh, lastCurrent:$lastCurrent, obsStartTs:$obsStartTs, obsStartUptime:$obsStartUptime}')
   _sl_diff_and_log "$snap" || true
+  _sl_unlock
+  # ---- end state transaction ----
 
   # ---------- header ----------
   # In watch mode the outer loop positions the cursor; dash() just emits plain
@@ -866,15 +936,23 @@ EOF
     prev_wh=""
     [[ -s "$SL_PB_ANCHOR" ]] && prev_wh=$(jq -r '.wh // empty' "$SL_PB_ANCHOR" 2>/dev/null || true)
     [[ -z "$wh" ]] && wh="$prev_wh"
+    # The anchor pins a bank percentage to the energyWh reading at that instant;
+    # if a concurrent poll advances the total between our read and our write,
+    # the pairing is off by that delta and every later runtime estimate
+    # inherits the error. Lock across both. (The dash pass above took and
+    # released the lock on its own — nesting it here would just reopen fd 9.)
+    _sl_lock
     if [[ -n "$wh" ]]; then
-      jq -c --argjson pct "$pct" --argjson wh "$wh" --argjson ts "$(date +%s)" \
+      anchor=$(jq -c --argjson pct "$pct" --argjson wh "$wh" --argjson ts "$(date +%s)" \
         '{pct:$pct, wh:$wh, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
-        "$SL_STATE" > "$SL_PB_ANCHOR"
+        "$SL_STATE")
     else
-      jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
+      anchor=$(jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
         '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
-        "$SL_STATE" > "$SL_PB_ANCHOR"
+        "$SL_STATE")
     fi
+    _sl_write_atomic "$SL_PB_ANCHOR" "$anchor"
+    _sl_unlock
     jq -r '"anchored: \(.pct)% · bank=\(.wh // "—") Wh (uptime \(.uptime)s, energyWh=\(.energyWh), boots=\(.boots))"' "$SL_PB_ANCHOR"
     ;;
   *) echo "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|speed|history|location|map|reboot|pb [pct [wh] | -]|raw '<json>']" >&2; exit 1 ;;

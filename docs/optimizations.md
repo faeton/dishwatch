@@ -48,11 +48,43 @@
   so "atomic" holds only for a single writer. Use a unique temp name
   (`os.CreateTemp` in the target dir) as well as the transaction lock. All save
   errors are also silently discarded (`_ = state.Save(...)`).
-- [ ] **The bash `sl` is a third writer.** `sl` (still in the repo, 41 KB)
-  writes the same `~/.cache/sl/state.json` with no lock, so a Go-side `flock`
-  coordinates the Go CLI and the app but not bash. Either teach `sl` the lock
-  or retire the shared path — the `StorageDir`/`UserCacheDir` move does the
-  latter by default.
+- [x] **The bash `sl` was a third writer.** `sl` writes the same
+  `~/.cache/sl/state.json`, so a Go-side `flock` coordinated the Go CLI and the
+  app but not bash. Taught it the lock rather than retiring the shared path:
+  the two implementations agree on the schema field by field and share the
+  energy accumulator's semantics, so splitting the directory now would orphan
+  existing totals for no gain while the sandbox is still going to end sharing
+  later anyway.
+
+  macOS ships no `flock(1)`, and this matters — a `mkdir`- or `shlock`-style
+  lock would serialize `sl` against itself and nothing else, which is worse
+  than no lock because it looks like coordination. `/usr/bin/lockf` uses
+  "BSD-style locking as described in flock(2)" and can lock an inherited
+  descriptor, so the lock outlives the helper and spans a shell critical
+  section. Verified in both directions with the real binaries against the real
+  `.lock`: `sl dash` blocks 2.3 s on a Go-held lock, `dishwatch dash` blocks
+  2.1 s on a bash-held one. Missing `lockf` degrades to unlocked, matching
+  `lock_other.go`.
+
+  **The bigger find was next to it: `sl` wrote state.json with a truncating
+  `>` redirect.** The file is zero bytes from open until `printf` runs, and a
+  reader polling against that writer caught it empty on **2980 of 9961 reads**
+  — 30%, not a narrow race. Go's `state.Load` reads an empty file as "no prior
+  snapshot", which sends `integrateEnergy` down the bootstrap path: seeded with
+  a real 14.45 Wh total, one poll landing in that window rewrote it as 5.99 Wh,
+  silently and indistinguishably from a reboot. Now temp-plus-rename, measured
+  at 0 empty reads in 424815. The `pb` anchor write had the same redirect and
+  additionally read `energyWh` outside any lock, which would pin a bank
+  percentage to a total that had already moved; both fixed.
+
+  Correcting an overclaim while here: two unlocked polls reading the same
+  cursor do **not** double-count. Each writes an absolute total, so the loser's
+  contribution is dropped rather than added, and since `energyWh` and
+  `lastCurrent` share a file they rewind together into a still-consistent pair
+  that the next poll re-integrates back into place. What the lock actually buys
+  is skew between state.json and stats.json — which advance separately, are
+  printed on one line as "obs 21m 8s @ 22.7 W", and are never reconciled — plus
+  the permanent undercount when a rewind lands further back than the ring.
 - [x] **The read side needs the lock too.** `buildDashboard` calls `LoadStats`
   and `state.Load` as two separate reads, so a poll landing between them
   produces a DTO mixing generation N stats with generation N−1 energy. Either

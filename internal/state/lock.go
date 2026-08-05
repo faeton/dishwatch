@@ -9,22 +9,39 @@ import (
 //
 // Every accumulator here is read-modify-write: load the previous snapshot,
 // integrate the samples that arrived since its cursor, write the result back.
-// Atomic replacement (temp + rename) makes each individual write all-or-nothing
-// but does nothing to make the *sequence* exclusive — two processes can both
-// load the same `lastCurrent`, both integrate the same delta, and both save,
-// double-counting energy and session samples. That is reachable in normal use:
-// the macOS app polls `dishwatch json` on a timer while `sl watch` may be
-// running in a terminal.
+// Atomic replacement (temp + rename) makes each individual write
+// all-or-nothing, but does nothing to make the *sequence* exclusive. That is
+// reachable in normal use: the macOS app polls `dishwatch json` on a timer
+// while `sl watch` may be running in a terminal.
 //
-// The lock therefore has to span load→integrate→save, not just the save. It
-// also has to span *all* the accumulators a single poll touches: snapshotAndLog
-// advances state.json and stats.json in turn, and a competing poll landing
-// between them would leave the two cursors describing different generations.
-// One lock for the whole transaction gives a single commit boundary.
+// Be precise about what goes wrong, because the obvious guess is wrong. Two
+// polls that both read cursor C do not inflate the total: each writes an
+// absolute value, so the loser's contribution is dropped rather than added —
+// a lost update, not a double-count. And because `energyWh` and `lastCurrent`
+// live in the same file, a stale write rewinds them together, leaving a pair
+// that is still self-consistent; the next poll re-integrates from the older
+// cursor onto the older total and lands back in roughly the right place.
+// Measured, an unlocked stalled-poll rewind cost about a second of dish time,
+// not a doubling.
 //
-// Deliberately not addressed: the bash `sl` writes the same files without
-// taking this lock. Until it is taught to, or retired, the guarantee holds
-// between Go processes only.
+// Two things are genuinely not self-healing, and they are what this lock is
+// for:
+//
+//  1. Cross-file skew. snapshotAndLog advances state.json and then stats.json,
+//     each with its own cursor. A competing poll landing between them rewinds
+//     one and not the other, so `energyWh` and `obsSeconds` end up describing
+//     different windows — and the dashboard prints them on the same line
+//     ("obs 21m 8s @ 22.7 W"). Nothing later reconciles that. This is why the
+//     lock spans *both* accumulators rather than each one individually.
+//  2. A rewind older than the ring. Self-healing depends on the skipped
+//     samples still being in the dish's 15-minute buffer. Past that they are
+//     gone and the undercount is permanent.
+//
+// So the lock has to span load→integrate→save for the whole poll, not just the
+// saves. Note that the far more damaging failure in this area was never the
+// missing lock at all but the non-atomic write it used to sit next to: see
+// writeFileAtomic in store.go, and the same fix in the bash `sl`, which now
+// takes this same lock via /usr/bin/lockf.
 type Txn struct {
 	f *os.File
 }
