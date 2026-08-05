@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/faeton/dishwatch/internal/dish"
 	"github.com/faeton/dishwatch/internal/ui"
 )
 
@@ -72,29 +73,64 @@ func runWatch(ctx context.Context, every int) error {
 		}
 	}()
 
+	// The dish client belongs to this loop and to nothing else.
+	//
+	// It used to be shared mutable state: a background reconnect goroutine
+	// assigned to `c` and `dialErr` while the render goroutine read them, with
+	// no synchronisation on either — a data race in the plain sense, and one
+	// that can hand the renderer a half-assigned interface value. It also
+	// leaked, since a client the reconnect installed could be overwritten by
+	// the loop's own lazy dial without anyone closing it.
+	//
+	// Now a reconnect hands its result back over a channel and the loop does
+	// every assignment itself. The channel is deliberately unbuffered: a
+	// finished dial parks on the send until the loop collects it, so when the
+	// loop returns instead, the goroutine's ctx.Done branch closes the client
+	// rather than dropping it on the floor.
 	c, dialErr := dialDish(ctx)
-	if c != nil {
-		defer c.Close()
-	}
+	defer func() {
+		if c != nil {
+			c.Close()
+		}
+	}()
+	reconnCh := make(chan *dish.Client)
+	reconnecting := false
 
 	glyphs := []rune(spinGlyphs)
 	pi := 0
 
 	for {
+		// Collect a reconnect that finished while we were rendering or
+		// counting down. Non-blocking: a dial still in flight just waits.
+		select {
+		case nc := <-reconnCh:
+			reconnecting = false
+			if nc != nil {
+				if c != nil {
+					c.Close()
+				}
+				c, dialErr = nc, nil
+			}
+		default:
+		}
+
 		// ---- Phase A: fetch + render (spinner during dish RPCs) ----
 		var buf bytes.Buffer
 		doneCh := make(chan error, 1)
+		// Snapshot both before handing them to the goroutine, so the loop can
+		// reassign them below without the goroutine observing the change.
+		client, clientErr := c, dialErr
 		go func() {
-			if dialErr != nil {
-				doneCh <- dialErr
+			if clientErr != nil {
+				doneCh <- clientErr
 				return
 			}
-			s, h, err := fetchDash(ctx, c)
+			s, h, err := fetchDash(ctx, client)
 			if err != nil {
 				doneCh <- err
 				return
 			}
-			loc, _ := c.GetLocation(ctx)
+			loc, _ := client.GetLocation(ctx)
 			L := ui.DetectLayout()
 			renderDash(ui.EOLPadWriter{W: &buf}, s, h, loc, L, true)
 			doneCh <- nil
@@ -116,23 +152,26 @@ func runWatch(ctx context.Context, every int) error {
 					}
 					c = nil
 					dialErr = err
-					// Attempt reconnect in background so next tick has a chance.
-					go func() {
-						nc, nerr := dialDish(ctx)
-						if nerr == nil && nc != nil {
-							// Swap in on next frame
-							c = nc
-							dialErr = nil
-						}
-					}()
-				} else {
-					// Rebuild client lazily if it was nil
-					if c == nil {
-						if nc, nerr := dialDish(ctx); nerr == nil {
-							c = nc
-							dialErr = nil
-						}
+					// Attempt reconnect in background so next tick has a
+					// chance. One at a time — a dish that stays down would
+					// otherwise accumulate a dial goroutine per frame.
+					if !reconnecting {
+						reconnecting = true
+						go func() {
+							nc, nerr := dialDish(ctx)
+							if nerr != nil {
+								nc = nil
+							}
+							select {
+							case reconnCh <- nc:
+							case <-ctx.Done():
+								if nc != nil {
+									nc.Close()
+								}
+							}
+						}()
 					}
+				} else {
 					os.Stdout.Write(buf.Bytes())
 					dialErr = nil
 				}

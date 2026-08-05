@@ -95,10 +95,26 @@
   Wh lies for weeks with nothing to catch it. Table tests (reboot mid-ring,
   gap > ring, cursor jump, all-zero `powerIn`, first observation) go in
   **before** any extraction — they're what makes the refactor safe.
-- [ ] **watch.go reconnect data race** (~line 119). A background goroutine
-  writes `c`/`dialErr` while the main `select` loop reads them; `-race`
-  confirms. Fix with a channel-fed reconnect or a mutex. CLI-only — don't let
-  it block the app track.
+- [x] **watch.go reconnect data race.** A background goroutine wrote
+  `c`/`dialErr` while the main `select` loop and the render goroutine read
+  them. Fixed by making the loop the sole owner: reconnects hand their result
+  back over an unbuffered channel, and the render goroutine gets a snapshot of
+  the client rather than the variable.
+
+  Two things showed up while reproducing it. First, the loop spawned a dial
+  goroutine on *every* failed frame, so a dish that stays down accumulates one
+  per second — and the races `-race` actually reported were write/write between
+  two of those reconnect goroutines, not between reconnect and render. One dial
+  in flight at a time now. Second, a client the reconnect installed could be
+  overwritten by the loop's own lazy re-dial with nobody closing it; that lazy
+  branch was unreachable anyway (a nil client always routes through `dialErr`
+  to the error path) and is gone. The unbuffered channel means a dial that
+  finishes after the user quits closes its own client instead of leaking it.
+
+  Verified with a flapping TCP proxy in front of the real dish — 1.2 s up,
+  1.2 s down, cutting live connections on the way down — so reconnects succeed
+  while a fetch is in flight, which is the interleaving the bug needed. Over
+  20 s: old binary 2 data races at `watch.go:124-125`, fixed binary 0.
 
 ## Contract integrity (app ↔ CLI)
 
