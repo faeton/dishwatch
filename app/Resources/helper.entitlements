@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for the embedded dishwatch helper.
+
+  `inherit` is the whole point and the only interesting line here. Apple's
+  supported pattern for a command-line tool bundled inside a sandboxed app is
+  that the child inherits the parent's sandbox at exec time rather than
+  carrying its own profile. So the helper does *not* get network.client of its
+  own — it gets the containing app's capabilities, which is why the app needs
+  that entitlement even though the app process never opens the dish socket
+  itself.
+
+  Giving the helper an independent sandbox profile is the usual way to break
+  this: it stops inheriting, and then nothing lines up.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.inherit</key>
+	<true/>
+</dict>
+</plist>

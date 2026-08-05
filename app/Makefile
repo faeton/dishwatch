@@ -30,6 +30,10 @@ SHORT_VER  := $(shell echo "$(VERSION)" | sed -E 's/^v//; s/-.*//; s/^[^0-9].*/0
 # goes up, which is all the Store requires of it.
 BUILD_NUM  := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
+# Built by the repo's own Makefile; not rebuilt here, so `make app` stays a
+# packaging step rather than a cross-language build.
+HELPER_SRC ?= ../bin/dishwatch
+
 SANDBOX    ?= 1
 ifeq ($(SANDBOX),1)
 ENTITLEMENTS := Resources/$(APP).entitlements
@@ -54,6 +58,11 @@ app:
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	cp "$(BUILD_DIR)/$(APP)" "$(CONTENTS)/MacOS/$(APP)"
+	# The engine. A sandboxed app cannot reach a CLI installed outside its
+	# bundle, so this is not a convenience — it is the only path that works for
+	# the Store build.
+	@test -x "$(HELPER_SRC)" || { echo "  missing $(HELPER_SRC) — run: (cd .. && go build -o bin/dishwatch .)" >&2; exit 1; }
+	cp "$(HELPER_SRC)" "$(CONTENTS)/MacOS/dishwatch-helper"
 	cp Resources/AppIcon.icns "$(CONTENTS)/Resources/AppIcon.icns"
 	cp Resources/Info.plist "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(SHORT_VER)" "$(CONTENTS)/Info.plist"
@@ -62,6 +71,14 @@ app:
 	printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	# --force because the SwiftPM binary may already carry an ad-hoc signature
 	# from the linker; without it codesign refuses rather than replacing.
+	# Nested code first, inside-out, or the outer seal covers a stale hash.
+	# The helper gets `inherit` rather than the app's own entitlements: Apple's
+	# embedded-tool rule is that a child inherits the parent's sandbox, and
+	# handing it an independent profile is what breaks that.
+	codesign --force --sign "$(CODESIGN_ID)" \
+	         --entitlements Resources/helper.entitlements \
+	         --options runtime --timestamp=none \
+	         "$(CONTENTS)/MacOS/dishwatch-helper"
 	codesign --force --sign "$(CODESIGN_ID)" \
 	         --entitlements "$(ENTITLEMENTS)" \
 	         --options runtime \

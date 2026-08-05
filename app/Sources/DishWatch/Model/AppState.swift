@@ -45,8 +45,17 @@ final class AppState: ObservableObject {
     init(provider: DishProvider? = nil) {
         if let provider {
             self.provider = provider
-            self.isLive = provider is LiveProvider
+            self.isLive = !(provider is SampleProvider)
+        } else if HelperProvider.locateHelper() != nil {
+            // Preferred: the embedded, supervised helper. The only path that
+            // works in a sandboxed bundle, and the one the Store build ships.
+            self.provider = HelperProvider()
+            self.isLive = true
         } else if LiveProvider.locateBinary() != nil {
+            // Legacy spawn-per-poll bridge, unsandboxed development only. Dies
+            // under the sandbox (it hunts for a CLI outside the bundle) and
+            // pays ~700ms per poll; kept so an unbundled `swift run` against a
+            // Homebrew install still shows live data.
             self.provider = LiveProvider()
             self.isLive = true
         } else {
@@ -94,11 +103,18 @@ final class AppState: ObservableObject {
         hasLoaded = true
     }
 
-    /// Reboot the dish via `dishwatch reboot` (live only). Triggers an immediate
-    /// poll afterwards so the UI reflects the drop. No-op on sample data.
+    /// Reboot the dish (live only). Triggers an immediate poll afterwards so
+    /// the UI reflects the drop. No-op on sample data.
     func reboot() async {
-        guard let live = provider as? LiveProvider else { return }
-        do { try await live.reboot() } catch { lastError = error.localizedDescription }
+        do {
+            switch provider {
+            case let h as HelperProvider: try await h.reboot()
+            case let l as LiveProvider:   try await l.reboot()
+            default: return
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
         await refresh()
     }
 

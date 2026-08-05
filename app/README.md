@@ -43,14 +43,27 @@ the live-data bridge below does *not* work in a sandboxed bundle — see below.
 | `make icon` | regenerate `Resources/AppIcon.icns` from the app's own glyph |
 | `make test` | the Swift tests |
 
-### The subprocess bridge does not survive the sandbox
+### How live data works
 
-`make app` produces a sandboxed bundle, and a sandboxed app cannot find or
-execute the `dishwatch` CLI — the probe reports `binaryNotFound` even with
-`DISHWATCH_BIN` set to an absolute path. This is not a bug to fix here; it is
-why the roadmap's Phase 3 (in-process engine) is a prerequisite for any App
-Store build rather than an optimisation. Until then, use `make app SANDBOX=0`
-or the bare executable when you need live data.
+`HelperProvider` starts one `dishwatch helper` child and keeps it, sending
+newline-delimited JSON over pipes. `make app` copies `../bin/dishwatch` into
+`Contents/MacOS/dishwatch-helper` and signs it with
+`Resources/helper.entitlements` — `app-sandbox` plus **`inherit`**, which is
+Apple's supported pattern for an embedded command-line tool: the child inherits
+the containing app's sandbox rather than carrying its own profile. That is why
+the *app* needs `network.client` even though the app process never opens the
+dish socket itself.
+
+One consequence that will confuse you once: **the bundled helper cannot be run
+from a terminal.** A binary carrying `inherit` must be spawned by a sandboxed
+parent, so running `Contents/MacOS/dishwatch-helper` directly dies with
+SIGTRAP. That is correct. Use `../bin/dishwatch helper` to poke at the protocol
+by hand.
+
+The old `LiveProvider` (spawn `dishwatch json` per poll) is still there but only
+as a fallback for an unbundled `swift run`. It cannot work sandboxed — the
+sandbox denies access to a CLI installed outside the bundle — and pays ~700 ms
+per poll against the helper's ~274 ms.
 
 ### Check the bundle end to end
 

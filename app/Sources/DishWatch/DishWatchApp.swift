@@ -40,7 +40,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["DISHWATCH_PROBE"] != nil {
             Task { @MainActor in
                 do {
-                    let d = try await LiveProvider().poll()
+                    // Exercise whatever the app itself would pick, not a
+                    // hardcoded provider — the point of the probe is to verify
+                    // the real path, and it silently stopped doing that once
+                    // the helper became the preferred one.
+                    let provider: DishProvider = HelperProvider.locateHelper() != nil
+                        ? HelperProvider() : LiveProvider()
+                    FileHandle.standardError.write(Data("PROBE via \(type(of: provider))\n".utf8))
+                    let d = try await provider.poll()
                     FileHandle.standardError.write(Data("PROBE OK state=\(d.state.rawValue) signal=\(d.signalScore) down=\(d.downMbps) up=\(d.upMbps) ping=\(d.pingMs) power=\(d.powerW) onBattery=\(d.onBattery) bankAnchored=\(d.bankAnchored) pingSeries=\(d.pingSeries.count) hw=\(d.hardwareShort) fw=\(d.firmware)\n".utf8))
                 } catch {
                     FileHandle.standardError.write(Data("PROBE ERR \(error)\n".utf8))
