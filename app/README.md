@@ -4,16 +4,16 @@ Native macOS menu-bar app for the Starlink dish monitor — the GUI companion to
 the `sl` CLI. Implements the design in
 [`DishWatch.dc.html`](../docs/) (Claude Design project "Dishwatch status bar UI").
 
-> Status: **live data wired.** The app shells out to `dishwatch json` (a CLI
-> subcommand that emits a `Dashboard` JSON reusing the gRPC client, energy
-> integrator, and power-bank state) and decodes it into `DishData`. It reflects
-> exactly what `sl`/`dishwatch` sees — including power-bank state: with `sl pb`
-> disabled (no anchor) the app stays in connection mode and shows no battery UI.
-> If the `dishwatch` binary isn't found it falls back to `SampleProvider`.
+> Status: **live data through an embedded helper.** The app supervises one
+> long-lived `dishwatch helper` child that holds the gRPC connection and answers
+> JSON-line requests, so the app reflects exactly what `sl`/`dishwatch` sees —
+> including power-bank state: with no anchor set the app stays in connection
+> mode and shows no battery UI. With no helper found it falls back to
+> `SampleProvider` and says so in the footer.
 >
-> The App Store build will swap the subprocess for an in-process `dishkit`
-> c-archive behind the same `DishProvider` protocol — see
-> [`../docs/roadmap.md`](../docs/roadmap.md).
+> This is the settled App Store architecture, chosen over an in-process cgo
+> `c-archive` and over a pure-Swift client — see
+> [`../docs/roadmap.md`](../docs/roadmap.md) for the reasoning and the numbers.
 
 ## Build & run
 
@@ -31,8 +31,8 @@ make run
 ```
 
 **Use `make run` for anything involving the sandbox, signing, launch-at-login
-or the version string; none of those exist in the bare executable.** But note
-the live-data bridge below does *not* work in a sandboxed bundle — see below.
+or the version string** — none of those exist in the bare executable, and only
+the bundle carries the embedded helper.
 
 | Target | What it does |
 |---|---|
@@ -81,10 +81,11 @@ from a shell, Terminal is the responsible process for TCC and the app inherits
 its permissions, so the result tells you nothing. The probe says which case it
 was in.
 
-Requires macOS 14+, Swift 6 / Xcode 26. The app finds the CLI via, in order:
-`$DISHWATCH_BIN`, `~/Sites/dishwatch/bin/dishwatch`, `/opt/homebrew/bin`,
-`/usr/local/bin`, then `dishwatch` on PATH. **Note:** a Homebrew-installed
-`dishwatch` predating the `json` command won't work — rebuild/reinstall the CLI.
+Requires macOS 14+, Swift 6 / Xcode 26. A bundled app uses
+`Contents/MacOS/dishwatch-helper` and nothing else. An unbundled debug build
+falls back to `$DISHWATCH_BIN` then `~/Sites/dishwatch/bin/dishwatch`; both
+lookups are `#if DEBUG`, so a shipped app can never run a binary it found lying
+around.
 
 ### Verify wiring without clicking
 
@@ -110,6 +111,8 @@ to see them properly.)
 | `Theme.swift` | design tokens — cyan/amber/green/red, panel gradient, score→color |
 | `Model/DishData.swift` | snapshot DTO (mirrors the Go `model.Dashboard`) + `IconMode` |
 | `Model/DishProvider.swift` | `DishProvider` protocol + `SampleProvider` (mockup numbers) |
+| `Model/HelperProvider.swift` | supervises the embedded helper; JSON-line protocol + framing |
+| `Model/LiveProvider.swift` | legacy spawn-per-poll bridge, unbundled dev only |
 | `Model/AppState.swift` | `@MainActor ObservableObject`: poll timer + persisted settings |
 | `Views/Components.swift` | `Spark`, `SignalGauge`, `SignalBars`, `BatteryGlyph`, `DishArcGlyph`, buttons |
 | `Views/MenuBarIcon.swift` | the status-item glyph (resolves `IconMode`, `.auto`) |
@@ -125,8 +128,18 @@ to see them properly.)
 | `Makefile` | assembles and signs the `.app` around the SwiftPM binary |
 | `Tests/` | decode contract + a golden fixture from the live CLI |
 
-## Wiring live data (next)
+## Next
 
-Implement a `LiveProvider: DishProvider` that calls the Go `dishkit` c-archive
-(`DishkitPoll(storageDir, addr) -> Dashboard JSON`) and decodes into `DishData`.
-Swap it in at `AppState(provider:)`. Everything above the protocol stays as-is.
+Live data is wired. What remains before this is shippable, in order:
+
+1. **Adaptive polling.** The app still polls at a fixed interval. Target is
+   5–15 s idle, 1–2 s while the popover or pinned panel is visible, backing off
+   on Low Power Mode and screen lock. The helper makes this cheap — there is no
+   longer a per-poll dial to amortise.
+2. **Split the RPCs.** The icon needs `get_status` only; `get_history` is the
+   expensive one and is only needed when sparklines, energy or bank are on
+   screen.
+3. **The `Observed` footer** (`../docs/macos-ui.md`). The decode contract is
+   done and tested; the view is not built.
+4. **Store prep** — a real signing identity, MAS entitlements, and cutting the
+   dev scaffolding listed in the roadmap.

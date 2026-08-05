@@ -29,7 +29,7 @@ later. Windows is a distant secondary.
 |------|-------|
 | SwiftUI UI (6 screens, menu bar, pinned panel, settings) | **done** — builds clean, macOS 14+ |
 | `DishProvider` protocol seam | **done** — the swap point for any backend |
-| Live data | `dishwatch helper` **built and measured**; Swift still on the old spawn-per-poll bridge |
+| Live data | **done** — `HelperProvider` supervises an embedded `dishwatch helper`, verified sandboxed |
 | `.app` bundle / Info.plist / entitlements / signing | **done** — `make app`, ad-hoc signed, sandboxed |
 | Engine decision (A/B/C) | **settled — C**, long-lived embedded helper over pipes |
 | `internal/model` + `internal/service` split | **not started** |
@@ -256,7 +256,7 @@ needs it (it does), which is true under all three options.
 | ~~**0**~~ | ~~Correctness: state transaction lock, energy bootstrap, characterization tests~~ | **done** |
 | ~~**1**~~ | ~~Real `.app` bundle~~ | **done** — `make app` |
 | ~~**2**~~ | ~~**Decision spike** — sandboxed local-network reachability~~ | **done — no veto; A vs B vs C still open** |
-| **3** | Engine behind `DishProvider`; kill the *external* subprocess | **Prerequisite** — the external bridge cannot work sandboxed |
+| ~~**3**~~ | ~~Engine behind `DishProvider`; kill the *external* subprocess~~ | **done** — supervised embedded helper |
 | **4** | Adaptive polling, split RPCs, idle cost near zero | |
 | **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | Precondition for the `Observed` row below |
 | **5a** | Metric presentation per [macos-ui.md](macos-ui.md) — session footer, peaks over means | Needs 5, or a zero-default carve-out |
@@ -264,10 +264,16 @@ needs it (it does), which is true under all three options.
 | **7** | Submission + App Review | |
 | **8** | *(optional)* notarized direct build via `cmd/dishwatchd`; Windows tray | |
 
-Phase 3 is the critical path: nothing sandboxed works while the app hunts for a
-CLI outside its bundle. The `internal/model` + `internal/service` extraction
-feeds every candidate engine, so it is the next real work regardless of which
-one wins.
+Phase 4 is now the critical path. The helper removed the per-poll dial, which
+is what made a fixed 1 Hz cadence defensible; with that gone, adaptive polling
+and splitting `get_status` from `get_history` are where the remaining battery
+cost lives.
+
+The `internal/model` + `internal/service` extraction is no longer on the app's
+critical path at all — under Option C the app never imports Go, it talks to it.
+It stays worth doing for the CLI's own sake (the `fillBank`/`pbRenderBank`
+duplication, the `renderBank` `init()` indirection), but it is cleanup now, not
+a blocker.
 
 ## Phase 0 — correctness (do regardless of architecture)
 

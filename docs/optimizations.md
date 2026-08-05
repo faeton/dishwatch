@@ -242,6 +242,16 @@
   actually saw, and is shared with the normal end-of-run path.
   `TestIntegrateStatsClosesOutageAcrossAGapWiderThanRing` fails without it
   (`OutageCount = 0, want 1`).
+- [x] **The app paid a full process spawn + gRPC dial + reflection download per
+  poll** (696 ms), and could not work sandboxed at all. Replaced by a
+  supervised long-lived `dishwatch helper` speaking JSON lines over pipes:
+  warm poll median 274 ms, and the pipe round trip itself is **0.014 ms**, so
+  what remains is dish RPC time that no architecture avoids.
+
+  Worth recording because it inverted an assumption: the 696 ms was never
+  evidence for linking Go in-process. It was evidence for holding the
+  connection open, which a child process does just as well as a `c-archive` —
+  and without putting a Go runtime fault inside the menu bar's address space.
 - [ ] **No `schemaVersion`, and the DTO is hand-duplicated** between
   `dashboard.go` and `DishData.swift`. Add a version field, generate JSON
   fixtures from Go and decode them in Swift tests, and diff Go JSON tags
