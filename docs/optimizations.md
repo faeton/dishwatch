@@ -109,24 +109,31 @@
   macos-ui.md's "Files to change" row so it stops saying "like the rest", and
   define the `CompactWidget` cold-start string — `—`, never `peak 0` and never
   a silent fall back to the 60 s mean.
-- [ ] **`integrateStats` backfills across gaps, which contradicts what the
-  footer claims.** [macos-ui.md](macos-ui.md) lists two invariants that "must
-  hold or the word becomes a lie", the second being *"never backfill the dish's
-  15-minute ring into the session figures beyond the initial bootstrap."* The
-  non-reboot path does exactly that: `n = cur - st.LastCurrent`, and any gap
-  **within** the ring is folded in wholesale. Only gaps larger than the ring
-  are dropped (`n > ringLen → n = 0`). So quitting DishWatch for ten minutes
-  and reopening silently counts ~600 unobserved samples as observed — while the
-  footer tooltip reads *"Stats cover time DishWatch was running. Gaps while
-  quit are excluded."* That is false for every gap under 15 minutes, which is
-  the common case, not an edge case.
+- [x] **`integrateStats` folds across gaps, which contradicted what the footer
+  claimed.** The non-reboot path is `n = cur - st.LastCurrent`, so any gap
+  **within** the ring was folded in wholesale while the tooltip read *"Stats
+  cover time DishWatch was running. Gaps while quit are excluded."* That was
+  false for every gap under 15 minutes — the common case, not an edge case.
 
-  Decide which way to resolve it before shipping the row: either clamp the
-  non-reboot fold to samples that postdate `LastTs` (behavior matches the
-  claim), or rewrite the copy to admit that up to 15 minutes of dish-recorded
-  history is included (claim matches behavior). The current pairing is the one
-  combination that isn't defensible, and it undercuts the whole reason the word
-  "Observed" was chosen over "Session".
+  **Resolved in favour of the code; the copy moved.** Folding forward from the
+  stored cursor is not a leak in the dedupe, it *is* how observation works: it
+  is the only reason a poll every 15 s can describe fifteen seconds of link
+  quality rather than the one second we happened to ask on. Roadmap Phase 4
+  widens the idle cadence to 5–15 s specifically to save battery, so clamping
+  the fold to samples postdating `LastTs` would thin the statistics in exact
+  proportion to how cheap we make polling — and would do it silently, since the
+  footer would keep the same shape with a fifteenth of the evidence behind it.
+
+  Every folded sample is a second the dish genuinely recorded and we genuinely
+  retrieved, which is the whole of what "Observed" claims. The invariant in
+  macos-ui.md was rewritten to say that (nothing interpolated, estimated, or
+  projected) instead of the narrower "never backfill", and the tooltip now
+  states the real envelope: a gap up to the ring is recovered in full, a gap
+  wider than the ring contributes nothing at all. That far end stays
+  deliberately under-claiming — we drop even the ~15 minutes still sitting in
+  the buffer rather than count part of a longer gap. Both halves are pinned by
+  `TestIntegrateStatsFoldsGapsInsideRing` and
+  `TestIntegrateStatsGapWiderThanRingAddsNothing`.
 - [x] **`deviceId` is mislabeled.** It's filled from
   `DeviceInfo.HardwareVersion` — the same source as `hardwareShort` — so the
   popover's "device ID" is really a hardware model string

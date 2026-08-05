@@ -95,16 +95,18 @@ func TestIntegrateStatsGapWiderThanRingAddsNothing(t *testing.T) {
 	}
 }
 
-// Characterization, NOT an endorsement. A gap that fits inside the ring is
-// backfilled wholesale, because folding the ring between polls is how the dedupe
-// works at all. But docs/macos-ui.md promises the opposite in the footer tooltip
-// ("Gaps while quit are excluded") and lists never backfilling beyond the initial
-// bootstrap as an invariant that must hold "or the word becomes a lie".
+// The near half of the envelope, and intended behaviour: a gap that still fits
+// inside the ring is folded in whole. Folding forward from the stored cursor is
+// what lets a slow poll cadence describe the whole interval between polls
+// rather than the single second we happened to ask on — the roadmap's Phase 4
+// widens that cadence to 5–15 s idle to save battery, so clamping the fold
+// would thin these statistics in exact proportion to how cheap polling gets.
 //
-// Both cannot be true. This test pins today's behaviour so the resolution —
-// clamp the fold, or change the copy — is a deliberate decision rather than a
-// silent one. See docs/optimizations.md.
-func TestIntegrateStatsBackfillsGapsInsideRing(t *testing.T) {
+// Every second counted here is a second the dish recorded and we retrieved,
+// which is all the word "Observed" claims. docs/macos-ui.md used to promise
+// something narrower in the footer tooltip ("Gaps while quit are excluded");
+// that copy was wrong and has been corrected rather than this code.
+func TestIntegrateStatsFoldsGapsInsideRing(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
@@ -117,7 +119,7 @@ func TestIntegrateStatsBackfillsGapsInsideRing(t *testing.T) {
 	st = integrateStats(statusAt(1, 700), fullRing(700), 1_700_000_600)
 
 	if st.Samples != 700 {
-		t.Errorf("Samples = %d, want 700 — current behaviour counts the unobserved gap", st.Samples)
+		t.Errorf("Samples = %d, want 700 — the ring still held the whole gap", st.Samples)
 	}
 }
 

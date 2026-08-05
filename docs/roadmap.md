@@ -180,16 +180,15 @@ Absent `obsSeconds`, or `< 120`, or any rendered field missing or wrong-typed �
 `nil` → hide the footer. `SampleProvider` builds the block explicitly. Scoped
 to one struct, so it does not block on the full Phase 5 rework.
 
-Two more things must be settled before this row ships:
+One more thing must be settled before this row ships:
 
-- **macos-ui.md's own invariant is currently violated.** It says never backfill
-  the ring beyond the initial bootstrap, but `integrateStats` folds in any
-  cursor gap that fits within the ring — so quitting the app for ten minutes
-  counts ~600 unobserved samples as observed, while the tooltip promises
-  "gaps while quit are excluded." Either clamp the fold to samples postdating
-  `LastTs`, or change the copy. See [optimizations.md](optimizations.md).
 - **`CompactWidget` cold start is unspecified.** Define the not-ready string —
   `—`, never `peak 0`, and never a silent fall back to the 60 s mean.
+
+*(Settled: the ring-fold vs "gaps while quit are excluded" contradiction. The
+code was right — folding forward from the cursor is what lets a slow poll
+cadence describe the interval between polls, which Phase 4 depends on. The copy
+moved. See [macos-ui.md](macos-ui.md#why-the-word-is-observed).)*
 
 ## Phase 1 — the `.app` bundle
 

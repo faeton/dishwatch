@@ -122,23 +122,39 @@ useless — so the mean is the headline and the worst second is detail.
 | Session footer | `Observed %@ · ping %d · %d%% clean · peak ↓%d ↑%d · %.1f W` |
 | Session footer, second line when outages > 0 | `%d outages · %@ dark · longest %@` |
 | Footer, cold start (< 2 min observed) | *hide the row entirely — never show zeros as statistics* |
-| Tooltip on the footer | `Stats cover time DishWatch was running. Gaps while quit are excluded.` |
+| Tooltip on the footer | `Covers seconds the dish recorded and DishWatch retrieved, including up to 15 min of catch-up after a gap. Longer gaps are excluded entirely.` |
 
 Use the existing `HumanDur` style for the duration: `12m`, `2h 14m`, `1d 3h`.
 
 ## Why the word is “Observed”
 
 Not `Session`, not `Today`, not `Since boot`. **`Observed` is the disclaimer** —
-it claims only the time the app was actually sampling and quietly declines to
-claim anything about the rest. That is why no second caveat line is needed
+it claims only the seconds we actually hold a sample for, and quietly declines
+to claim anything about the rest. That is why no second caveat line is needed
 underneath, and why the tooltip is optional rather than load-bearing.
 
 Two consequences that must hold or the word becomes a lie:
 
 1. The duration comes from the **sample count**, not `now - obsStartTs`. Wall
    clock would silently absorb every gap into the denominator.
-2. Never backfill the dish's 15-minute ring into the session figures beyond the
-   initial bootstrap. That would smuggle short-buffer data under a long label.
+2. Every counted second must correspond to a sample the dish actually recorded
+   and we actually retrieved. Nothing is interpolated, estimated, or projected
+   across a gap.
+
+**Observed is not the same as "while the app was frontmost", and deliberately
+so.** Each poll folds forward every ring sample since the previous cursor, which
+is the only reason a 15-second poll cadence can describe fifteen seconds of link
+quality rather than one — and Phase 4 of the roadmap widens that cadence to
+5–15 s idle precisely to save battery. Clamping the fold to samples postdating
+`LastTs` would thin the statistics in exact proportion to how cheap we make
+polling, which is backwards.
+
+The honest limit is therefore the dish's buffer, not the app's lifetime: a gap
+up to the 15-minute ring is recovered in full, and a gap wider than the ring
+contributes **nothing** — not even the portion still sitting in the buffer, and
+that under-claim is intentional. Consequence #2 still holds throughout, because
+folded samples are real recorded seconds; the tooltip is what had to change.
+`sessionstats_test.go` pins both halves of this envelope.
 
 ## Files to change
 
