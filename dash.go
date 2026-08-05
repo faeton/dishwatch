@@ -536,22 +536,25 @@ func renderObserved(w io.Writer, L ui.Layout) {
 	// reported as clean-second share plus outage events, because on a moving
 	// dish the distribution is bimodal and its mean names a state that never
 	// happened. See docs/macos-ui.md.
-	fmt.Fprintf(w, "  %sLink  %s%sping %.1f ms · %.0f%% clean · %.0f%% degraded · %.0f%% dark%s\n",
+	// Label field is 7 wide here, not the 6 used above: "Outage" fills six
+	// exactly and still needs a separator, so a 6-wide field would leave this
+	// one line indented a column further than its neighbours.
+	fmt.Fprintf(w, "  %sLink   %s%sping %.1f ms · %.0f%% clean · %.0f%% degraded · %.0f%% dark%s\n",
 		ui.Lbl, ui.Rst, ui.Dim, st.PingAvg(),
 		st.CleanPct(), st.DegradedPct(), st.DarkPct(), ui.Rst)
 	if n := st.Outages(); n > 0 {
-		fmt.Fprintf(w, "  %sOutage%s %s%d · %s dark · longest %s%s\n",
+		fmt.Fprintf(w, "  %sOutage %s%s%d · %s dark · longest %s%s\n",
 			ui.Lbl, ui.Rst, ui.Dim, n,
 			state.HumanDur(st.OutageSeconds), state.HumanDur(st.LongestOutage()), ui.Rst)
 	} else {
-		fmt.Fprintf(w, "  %sOutage%s %snone%s\n", ui.Lbl, ui.Rst, ui.Dim, ui.Rst)
+		fmt.Fprintf(w, "  %sOutage %s%snone%s\n", ui.Lbl, ui.Rst, ui.Dim, ui.Rst)
 	}
-	fmt.Fprintf(w, "  %sPeak  %s%s↓ %.2f Mbps  ↑ %.2f Mbps%s\n",
+	fmt.Fprintf(w, "  %sPeak   %s%s↓ %.2f Mbps  ↑ %.2f Mbps%s\n",
 		ui.Lbl, ui.Rst, ui.Dim, st.DownPeakMbps(), st.UpPeakMbps(), ui.Rst)
-	fmt.Fprintf(w, "  %sData  %s%s↓ %s  ↑ %s%s\n",
+	fmt.Fprintf(w, "  %sData   %s%s↓ %s  ↑ %s%s\n",
 		ui.Lbl, ui.Rst, ui.Dim, humanBytes(st.DownBytes()), humanBytes(st.UpBytes()), ui.Rst)
 	if st.PowerCount > 0 {
-		fmt.Fprintf(w, "  %sPower %s%savg %.1f W · peak %.1f W%s\n",
+		fmt.Fprintf(w, "  %sPower  %s%savg %.1f W · peak %.1f W%s\n",
 			ui.Lbl, ui.Rst, ui.Dim, st.PowerAvg(), st.PowerMax, ui.Rst)
 	}
 }
