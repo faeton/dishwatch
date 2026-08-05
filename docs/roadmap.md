@@ -125,10 +125,10 @@ something to do without advice. This repo is public.
 
 | | |
 |---|---|
-| Warm poll through the helper | **median 274 ms**, min 150 ms (vs **696 ms** spawn-per-poll) |
+| Warm poll through the helper | **median 154 ms**, min 54 ms, p95 202 ms (vs **696 ms** spawn-per-poll) |
 | IPC round trip, no dish (`ping` op, n=200) | **0.014 ms** median, 0.024 ms p95 |
-| Helper RSS, connection held | 22.9 MB at start → **30.8 MB** after polls, flat |
-| Helper CPU, idle with connection open | **0.0%** |
+| Helper RSS over 787 polls / 15 min | 35.0 MB → **37.4 MB**, plateaued from t=685 s |
+| Helper CPU between polls | **0.0%** |
 
 The second row is the one that decides A vs C: **the architecture costs
 14 microseconds**. The remaining 274 ms is dish RPC time, which every option
@@ -136,10 +136,16 @@ pays identically — so A's 61–91 ms figure was never about being in-process, 
 was about connection reuse, which C has too. There is no performance argument
 left for cgo.
 
-Still outstanding, per both reviewers: a sustained idle soak measuring combined
-app+helper Energy Impact and wakeups, not just RSS. C **relocates** the Go
-runtime, it does not remove it, and the roadmap said otherwise in an earlier
-draft.
+The latency figures come from a 15-minute soak at 1 Hz — the app's current
+worst-case cadence, and one Phase 4 intends to relax. RSS grew 2.4 MB over 787
+polls and then sat flat at 37.4 MB for the final three-and-a-bit minutes, which
+looks like a plateau rather than a leak; fifteen minutes is not long enough to
+prove that, so it is worth re-checking over hours before submission.
+
+Still outstanding, per both reviewers: combined **app + helper** Energy Impact
+and wakeups from Instruments, not RSS and CPU sampled with `ps`. C **relocates**
+the Go runtime, it does not remove it, and an earlier draft of this roadmap
+oversold that.
 
 ### Gate result (2026-08-05): reachability passes, on both stacks
 
