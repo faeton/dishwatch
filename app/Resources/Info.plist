@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Bundle metadata for DishWatch.app.
+
+  CFBundleShortVersionString and CFBundleVersion are placeholders here and are
+  rewritten from git by `make app` — see app/Makefile. Leaving them literal in
+  the repo means a plist you can read, and a build you can't accidentally ship
+  labelled "dev" (which is what the unbundled binary reported forever).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>DishWatch</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.faeton.dishwatch</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DishWatch</string>
+	<!-- Guideline 5.2: the name and description must not read as an official
+	     Starlink product. "Dishwatch — an unofficial monitor for Starlink
+	     dishes" is the approved framing; no SpaceX or Starlink wordmark or
+	     logo appears in the icon or anywhere in the bundle. -->
+	<key>CFBundleDisplayName</key>
+	<string>DishWatch</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- Accessory app: menu bar only, no Dock icon, no main window. The
+	     AppDelegate also calls setActivationPolicy(.accessory); this is what
+	     makes it true from launch rather than after a Dock icon flashes. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT licensed. Not affiliated with SpaceX or Starlink.</string>
+	<!-- Shown verbatim in the Local Network permission prompt. This is a
+	     review-visible surface: it has to explain the 192.168.100.1 traffic in
+	     the user's terms, not ours. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>DishWatch reads status directly from your Starlink dish at 192.168.100.1 on your local network. Nothing is sent anywhere else.</string>
+	<!-- The dish speaks gRPC over plain TCP and advertises no Bonjour service,
+	     so no NSBonjourServices key. Recheck this if the TCC spike (roadmap
+	     Phase 2) shows the prompt never appears without one. -->
+</dict>
+</plist>

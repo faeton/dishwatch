@@ -7,6 +7,9 @@ import AppKit
 @MainActor
 enum Render {
     static func runIfRequested() -> Bool {
+        if let path = ProcessInfo.processInfo.environment["DISHWATCH_APPICON"] {
+            renderAppIcon(to: path); return true
+        }
         if let dir = ProcessInfo.processInfo.environment["DISHWATCH_ICONS"] {
             renderCandidates(dir); return true
         }
@@ -31,6 +34,56 @@ enum Render {
                  dir, "icon-\(mode.rawValue.replacingOccurrences(of: " ", with: "-"))")
         }
         return true
+    }
+
+    /// Renders the 1024×1024 app icon (`DISHWATCH_APPICON=<file.png>`), from
+    /// which `make icon` builds the `.icns`.
+    ///
+    /// It draws the app's own `DishArcGlyph` on the panel gradient rather than
+    /// using stock art, so the icon and the menu bar cannot drift apart.
+    ///
+    /// **Deliberately no Starlink or SpaceX mark.** Guideline 5.2 is the single
+    /// highest rejection risk for this app (docs/roadmap.md), and the icon is
+    /// the most conspicuous place to trip it. A dish arc is a dish arc.
+    ///
+    /// This is a functional placeholder, not finished art — it exists so the
+    /// bundle is complete and signable, and so the 1024 asset the Store
+    /// requires has a source rather than being a one-off export nobody can
+    /// reproduce. Replacing it is a design decision.
+    private static func renderAppIcon(to path: String) {
+        // macOS icons sit in a rounded square inset from the canvas; drawing to
+        // the full 1024 makes the app look oversized next to its neighbours.
+        let canvas: CGFloat = 1024, inset: CGFloat = 100
+        let tile = canvas - inset * 2
+        let glyph = tile * 0.62
+        let icon = ZStack {
+            RoundedRectangle(cornerRadius: tile * 0.2237, style: .continuous)
+                .fill(LinearGradient(colors: [Color(hex: 0x101725), Color(hex: 0x05080F)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: tile * 0.2237, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 3))
+            // The glyph is bottom-anchored and clipped by design — its content
+            // fills only the lower half of its own frame — so left centred it
+            // sits visibly low in the tile. Lift it by a quarter of its height
+            // to centre the ink rather than the box.
+            DishArcGlyph(color: DW.cyan, size: glyph, strokeWidth: glyph * 0.045)
+                .shadow(color: DW.cyan.opacity(0.5), radius: 44)
+                .offset(y: -glyph * 0.25)
+        }
+        .frame(width: tile, height: tile)
+        .padding(inset)
+        .frame(width: canvas, height: canvas)
+
+        let renderer = ImageRenderer(content: icon)
+        renderer.scale = 1
+        guard let img = renderer.nsImage,
+              let tiff = img.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else {
+            FileHandle.standardError.write(Data("app icon render failed\n".utf8)); return
+        }
+        try? png.write(to: URL(fileURLWithPath: path))
+        FileHandle.standardError.write(Data("wrote \(path)\n".utf8))
     }
 
     /// Preview each candidate glyph on a dark + light menu bar, plus a contact

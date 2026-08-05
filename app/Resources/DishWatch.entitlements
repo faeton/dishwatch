@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sandbox entitlements for local development and the TCC spike.
+
+  This is the minimum the app can run on: the sandbox itself, plus outgoing
+  network. `network.client` covers the gRPC connection to 192.168.100.1 — but
+  it is necessary, not sufficient. Reaching a private address additionally
+  trips Local Network TCC, which is a separate user prompt keyed off
+  NSLocalNetworkUsageDescription in Info.plist and has a track record of
+  behaving differently in a sandboxed bundle than in Terminal. That gap is
+  exactly what roadmap Phase 2 exists to measure.
+
+  Deliberately absent:
+    - network.server         — nothing listens.
+    - files.user-selected    — nothing opens a file the user picked.
+    - Any temporary-exception entitlement. Those need review justification and
+      we have no reason to want one.
+
+  Note the app writes state under the sandbox container rather than
+  ~/.cache/sl; internal/state.SetDir exists for exactly that (store.go). This
+  file grants no access to ~/.cache, and it should stay that way — an app that
+  needs a home-directory exception to work is one that will argue with review.
+
+  MAS builds need a *different* file, not this one: the Store injects
+  com.apple.application-identifier and com.apple.developer.team-identifier,
+  both of which depend on a real team ID. Direct notarized builds instead need
+  the hardened runtime, which is a codesign flag rather than an entitlement.
+  Don't assume one file serves all three.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

@@ -29,6 +29,9 @@ final class AppState: ObservableObject {
     @Published var simulateBattery: Bool {
         didSet { Task { await refresh() } }
     }
+    /// Why the last launch-at-login change didn't take, if it didn't.
+    @Published private(set) var launchAtLoginError: String?
+    private var applyingLaunchAtLogin = false
 
     private let provider: DishProvider
     private let defaults = UserDefaults.standard
@@ -99,14 +102,27 @@ final class AppState: ObservableObject {
         await refresh()
     }
 
-    /// Register/unregister the app as a macOS login item. No-op in a non-bundle
-    /// dev build (SMAppService needs a real app bundle); harmless via try?.
+    /// Register/unregister the app as a macOS login item.
+    ///
+    /// This used to swallow the error, which made the toggle a liar: outside a
+    /// real bundle `SMAppService.mainApp` has no bundle identifier to register,
+    /// so it threw every time and the switch sat there showing ON having done
+    /// nothing. Now a failure snaps the toggle back and says why, because a
+    /// setting that silently doesn't apply is worse than one that refuses.
     private func applyLaunchAtLogin() {
+        guard !applyingLaunchAtLogin else { return }   // re-entry from the revert below
         do {
             if launchAtLogin { try SMAppService.mainApp.register() }
             else { try SMAppService.mainApp.unregister() }
+            launchAtLoginError = nil
         } catch {
-            // Surface nothing fatal; the toggle reflects intent.
+            launchAtLoginError = Bundle.main.bundleIdentifier == nil
+                ? "Launch at login needs the packaged app (make app)."
+                : error.localizedDescription
+            applyingLaunchAtLogin = true
+            launchAtLogin = !launchAtLogin
+            defaults.set(launchAtLogin, forKey: "launchAtLogin")
+            applyingLaunchAtLogin = false
         }
     }
 

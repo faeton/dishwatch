@@ -21,11 +21,52 @@ the `sl` CLI. Implements the design in
 # 1. Build the CLI with the `json` subcommand the app calls for live data:
 (cd .. && CGO_ENABLED=0 go build -o bin/dishwatch .)
 
-# 2. Build & run the app:
+# 2a. Bare executable — fastest loop, no bundle:
 cd app
 swift build
 ./.build/debug/DishWatch        # appears in the menu bar (accessory app, no Dock icon)
+
+# 2b. Or the real thing — signed, sandboxed .app:
+make run
 ```
+
+**Use `make run` for anything involving the sandbox, signing, launch-at-login
+or the version string; none of those exist in the bare executable.** But note
+the live-data bridge below does *not* work in a sandboxed bundle — see below.
+
+| Target | What it does |
+|---|---|
+| `make app` | build, assemble the bundle, ad-hoc sign, sandboxed |
+| `make app SANDBOX=0` | same without the sandbox — the A/B control |
+| `make app CODESIGN_ID=...` | sign with a real identity |
+| `make run` | build and launch via LaunchServices |
+| `make icon` | regenerate `Resources/AppIcon.icns` from the app's own glyph |
+| `make test` | the Swift tests |
+
+### The subprocess bridge does not survive the sandbox
+
+`make app` produces a sandboxed bundle, and a sandboxed app cannot find or
+execute the `dishwatch` CLI — the probe reports `binaryNotFound` even with
+`DISHWATCH_BIN` set to an absolute path. This is not a bug to fix here; it is
+why the roadmap's Phase 3 (in-process engine) is a prerequisite for any App
+Store build rather than an optimisation. Until then, use `make app SANDBOX=0`
+or the bare executable when you need live data.
+
+### Check the bundle end to end
+
+```sh
+make app
+open -W .build/DishWatch.app \
+  --env DISHWATCH_NETPROBE=~/Library/Containers/com.faeton.dishwatch/Data/netprobe.txt
+cat ~/Library/Containers/com.faeton.dishwatch/Data/netprobe.txt
+```
+
+Reports bundle id, version, `SMAppService` status, whether the sandbox is
+actually on, and whether the dish is reachable via both `NWConnection` and a
+raw BSD socket. Launch it with `open`, not by running the Mach-O directly:
+from a shell, Terminal is the responsible process for TCC and the app inherits
+its permissions, so the result tells you nothing. The probe says which case it
+was in.
 
 Requires macOS 14+, Swift 6 / Xcode 26. The app finds the CLI via, in order:
 `$DISHWATCH_BIN`, `~/Sites/dishwatch/bin/dishwatch`, `/opt/homebrew/bin`,
@@ -65,7 +106,11 @@ to see them properly.)
 | `Views/CompactWidget.swift` | **C** — always-on-top pinned widget |
 | `Views/BatterySetupSheet.swift` | battery setup → maps to `sl pb <pct> <wh>` |
 | `Views/SettingsView.swift` | icon picker + behaviour toggles |
-| `Render.swift` | headless PNG snapshot mode |
+| `Render.swift` | headless PNG snapshot mode + the 1024 app-icon source |
+| `NetProbe.swift` | Phase 2 spike — bundle health + dish reachability via two stacks |
+| `Resources/` | `Info.plist`, entitlements (sandboxed + the unsandboxed control), `AppIcon.icns` |
+| `Makefile` | assembles and signs the `.app` around the SwiftPM binary |
+| `Tests/` | decode contract + a golden fixture from the live CLI |
 
 ## Wiring live data (next)
 

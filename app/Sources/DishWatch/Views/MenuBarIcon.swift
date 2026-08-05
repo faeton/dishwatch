@@ -101,12 +101,17 @@ struct BatteryGlyph: View {
 struct DishArcGlyph: View {
     var color: Color
     var size: CGFloat = 14
+    /// Absolute, not proportional, because at menu-bar sizes the stroke has to
+    /// land on whole pixels to stay crisp — scaling it would blur the glyph at
+    /// exactly the size it matters most. Callers drawing it large (the app
+    /// icon) pass a proportional width instead, or the arcs vanish to hairlines.
+    var strokeWidth: CGFloat = 1.8
     var body: some View {
         ZStack(alignment: .bottom) {
             Circle().fill(color).frame(width: size * 0.32, height: size * 0.32)
-            Arc().stroke(color, lineWidth: 1.8)
+            Arc().stroke(color, lineWidth: strokeWidth)
                 .frame(width: size * 0.72, height: size * 0.72)
-            Arc().stroke(color.opacity(0.45), lineWidth: 1.8)
+            Arc().stroke(color.opacity(0.45), lineWidth: strokeWidth)
                 .frame(width: size * 1.05, height: size * 1.05)
         }
         .frame(width: size, height: size, alignment: .bottom)

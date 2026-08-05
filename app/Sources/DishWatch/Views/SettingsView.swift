@@ -26,6 +26,12 @@ struct SettingsView: View {
                         toggleRow("Show value next to icon", $store.showValueNextToIcon)
                         toggleRow("Pinned widget — always on top", $store.pinnedWidget)
                         toggleRow("Launch at login", $store.launchAtLogin)
+                        if let err = store.launchAtLoginError {
+                            Text(err)
+                                .font(.system(size: 11))
+                                .foregroundStyle(DW.amber)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         #if DEBUG
                         toggleRow("Simulate battery (demo)", $store.simulateBattery)
                         #endif

@@ -31,7 +31,7 @@ struct DishWatchApp: App {
 /// optional always-on-top pinned widget window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if Render.runIfRequested() {
+        if Render.runIfRequested() || NetProbe.runIfRequested() {
             NSApp.terminate(nil)
             return
         }

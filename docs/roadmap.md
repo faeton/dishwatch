@@ -1,9 +1,14 @@
 # Roadmap — native macOS app
 
-> Status as of **2026-08-04**: a working SwiftUI menu-bar prototype exists in
-> [`app/`](../app) with live data via a `dishwatch json` subprocess bridge. The
-> Go core has **not** been split yet, and there is **no `.app` bundle**, so
-> nothing about sandboxing, signing, or the App Store has been exercised.
+> Status as of **2026-08-05**: the SwiftUI menu-bar app in [`app/`](../app) now
+> builds a real signed, sandboxed `.app` (`make app`), and the architecture gate
+> has been run against a live dish rather than argued about — a sandboxed bundle
+> **can** reach `192.168.100.1`, through both candidate network stacks.
+>
+> The same spike killed the subprocess bridge: sandboxed, the app cannot execute
+> the CLI at all. So Phase 3 (in-process engine) moves from optimisation to
+> prerequisite, and the `internal/model` + `internal/service` split that feeds it
+> is the critical path.
 >
 > This doc supersedes the original "planned, not started" roadmap, whose phase
 > order is now obsolete — the UI got built before the core split.
@@ -21,11 +26,11 @@ later. Windows is a distant secondary.
 |------|-------|
 | SwiftUI UI (6 screens, menu bar, pinned panel, settings) | **done** — builds clean, macOS 14+ |
 | `DishProvider` protocol seam | **done** — the swap point for any backend |
-| Live data | **bridge only** — shells out to `dishwatch json` |
-| `.app` bundle / Info.plist / entitlements / signing | **none** |
+| Live data | **bridge only**, and the bridge is dead under the sandbox — see the gate result |
+| `.app` bundle / Info.plist / entitlements / signing | **done** — `make app`, ad-hoc signed, sandboxed |
 | `internal/model` + `internal/service` split | **not started** |
-| Sandbox, local-network TCC, `SMAppService` | **never exercised** |
-| Tests (Go or Swift) | **none** |
+| Sandbox, local-network TCC, `SMAppService` | **exercised** — reachability passes, login item reachable |
+| Tests (Go or Swift) | **Go: energy/stats/ring/store. Swift: 11, incl. a golden fixture** |
 
 ### Measurements (2026-08-04, live dish, darwin/arm64)
 
@@ -75,28 +80,75 @@ settled by an experiment rather than by argument.
 actually threatens this app is whether a *sandboxed, signed* `.app` can reach
 `192.168.100.1` at all. Local Network permission has a track record of working
 in Terminal and silently failing inside a sandboxed bundle, and that risk
-applies to **both** options. So:
+applies to **both** options.
 
-1. Build the real `.app` bundle first (Phase 1 below).
-2. Inside it, spike Option A — time-boxed to one day. Sandboxed, signed,
-   entitled, calling the c-archive against a live dish.
-3. If local-network works through cgo → **take Option A**; the code-reuse
-   argument wins and there is no reason to rewrite the transport.
-4. If it fails in ways that are Go-net-stack-specific → **fall back to Option
-   B**, and vendor the proto as that track's first task.
+### Gate result (2026-08-05): reachability passes, on both stacks
 
-Do not finish Swift features or polish UI before this gate. Do not extract the
-Go core "for dishkit" before it either — extract it because the CLI needs it
-(it does), which is true under both options.
+Run it yourself: `make app && open -W .build/DishWatch.app --env
+DISHWATCH_NETPROBE=~/Library/Containers/com.faeton.dishwatch/Data/netprobe.txt`
+(`app/Sources/DishWatch/NetProbe.swift`).
+
+The probe opens the dish port two ways in the same process, under the same
+signature, because the two options reach the network through different stacks:
+`NWConnection`, which is what Local Network TCC is built around and what a pure
+Swift client would use, and a raw `connect(2)`, which is what Go's net package
+does inside a `c-archive`. A disagreement between them *would have been* the
+decision.
+
+| Configuration | `NWConnection` | BSD socket |
+|---|---|---|
+| unbundled binary | connected | connected |
+| bundle, unsandboxed, LaunchServices | connected | connected |
+| **bundle, sandboxed, LaunchServices** | **connected** | **connected** |
+
+Launching via `open` matters and is not a detail: run the bundle's Mach-O from
+a shell and Terminal becomes the *responsible process* for TCC, so the app can
+inherit a grant Terminal already holds and report a success that predicts
+nothing. The probe reports which case it was in, and the table above is the
+self-responsible one.
+
+**Two honest caveats.** No Local Network permission prompt appeared, and no
+`kTCCServiceLocalNetwork` row exists for the app — but that service lives in
+the root-owned system TCC database, so whether a grant was recorded silently or
+the prompt simply doesn't fire for unicast TCP to a private address on macOS
+26.5.2 is not something this spike can distinguish. Either way the **first-run
+prompt path is still unexercised**, so the engine must keep the retry/backoff
+and visible permission state the App Review checklist calls for. And this is one
+machine on one OS version; it is evidence, not a guarantee.
+
+**So the architecture question is no longer gated on reachability.** Neither
+option is blocked, which means the choice falls back to the ordinary trade —
+one implementation of the energy integrator versus a smaller always-on process
+— rather than to a risk. Option A's code-reuse argument now wins by default,
+because the thing that could have vetoed it didn't. Confirming it end to end
+still wants the real `c-archive` linked in, since a raw socket is a proxy for
+Go's net stack rather than Go's net stack itself.
+
+### What the same spike *did* kill: the subprocess bridge
+
+Sandboxed, the app cannot find or execute the CLI at all — `PROBE ERR
+binaryNotFound`, even with `DISHWATCH_BIN` pointing at an absolute path.
+Verified as an A/B with only `com.apple.security.app-sandbox` flipped and
+everything else — same binary, same hardened runtime, same ad-hoc signature —
+held constant.
+
+That promotes Phase 3 from optimisation to prerequisite. Killing the subprocess
+was previously justified by the 696 ms poll cost; it is now the only way any
+App Store build works at all, under either option. The bridge remains fine for
+unsandboxed development and nothing else.
+
+Do not finish Swift features or polish UI before that. Do not extract the Go
+core "for dishkit" before it either — extract it because the CLI needs it (it
+does), which is true under both options.
 
 ## Revised phases
 
 | Phase | Work | Gate |
 |-------|------|------|
-| **0** | Correctness: state transaction lock, energy bootstrap, characterization tests, `StorageDir` param | Ships value to the CLI alone |
-| **1** | Real `.app` bundle: Info.plist, entitlements, asset catalog, signing, version, working `SMAppService` | Unblocks *everything* below |
-| **2** | **Decision spike** — sandboxed local-network reachability, Option A vs B | **Go/no-go on architecture** |
-| **3** | Persistent engine behind `DishProvider`; delete the subprocess | |
+| ~~**0**~~ | ~~Correctness: state transaction lock, energy bootstrap, characterization tests~~ | **done** |
+| ~~**1**~~ | ~~Real `.app` bundle~~ | **done** — `make app` |
+| ~~**2**~~ | ~~**Decision spike** — sandboxed local-network reachability~~ | **done — passes on both stacks** |
+| **3** | Persistent engine behind `DishProvider`; delete the subprocess | **Now a prerequisite, not an optimisation** — the bridge cannot work sandboxed |
 | **4** | Adaptive polling, split RPCs, idle cost near zero | |
 | **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | Precondition for the `Observed` row below |
 | **5a** | Metric presentation per [macos-ui.md](macos-ui.md) — session footer, peaks over means | Needs 5, or a zero-default carve-out |
@@ -104,7 +156,9 @@ Go core "for dishkit" before it either — extract it because the CLI needs it
 | **7** | Submission + App Review | |
 | **8** | *(optional)* notarized direct build via `cmd/dishwatchd`; Windows tray | |
 
-Phase 0 and Phase 1 are independent and can run in parallel.
+Phase 3 is now the critical path: nothing sandboxed works until the subprocess
+is gone, so the `internal/model` + `internal/service` extraction that feeds it
+is the next real work.
 
 ## Phase 0 — correctness (do regardless of architecture)
 
@@ -190,26 +244,53 @@ code was right — folding forward from the cursor is what lets a slow poll
 cadence describe the interval between polls, which Phase 4 depends on. The copy
 moved. See [macos-ui.md](macos-ui.md#why-the-word-is-observed).)*
 
-## Phase 1 — the `.app` bundle
+## Phase 1 — the `.app` bundle — **done**
 
-Currently `app/Package.swift` declares only an `.executable`. Consequences that
-are live, not deferred:
+`app/Makefile` assembles the bundle around the SwiftPM binary. Not an Xcode
+project and not `xcodegen`: the app is one executable target with no
+storyboards, build phases or dependencies, so a project file would be hundreds
+of lines of generated XML whose only job is to copy three files and run
+`codesign`. Revisit if a widget extension or XPC service ever appears.
 
-- `SMAppService.mainApp.register()` throws without a bundle identifier, and the
-  `catch` swallows it — so **"Launch at login" displays ON and does nothing.**
-- `Bundle.main.infoDictionary` is nil → Settings shows "DishWatch dev" forever.
-- `UserDefaults.standard` keys off the executable name; every setting resets
-  when the app is finally bundled. Plan a migration or accept the reset.
-- Nothing can be signed, sandboxed, notarized, or submitted.
+```
+make app                 # build, assemble, ad-hoc sign, sandboxed
+make app SANDBOX=0       # the spike's control — one bit changed
+make app CODESIGN_ID=... # sign with a real identity
+make run                 # build and launch
+make icon                # regenerate AppIcon.icns from the app's own glyph
+make test                # 11 Swift tests
+```
 
-Pick one packaging approach (Xcode project, `xcodegen`, or a `make app` target
-that assembles the bundle around the SwiftPM binary) and add: bundle identity,
-`Info.plist` with `LSUIElement` and `NSLocalNetworkUsageDescription`,
-`com.apple.security.app-sandbox` + `com.apple.security.network.client`
-entitlements, asset catalog with a 1024 icon, and a version string.
+What it produces: `com.faeton.dishwatch`, `LSUIElement`, a real version from
+`git describe` (`0.1.2 (44)`, where the build number is the commit count),
+`NSLocalNetworkUsageDescription`, sandbox + `network.client` entitlements, a
+1024 icon, hardened runtime, and an ad-hoc signature — which is enough to make
+the sandbox and TCC real on this machine, though not to distribute.
 
-Note: MAS and notarized-direct need **different** entitlement sets. Don't
-assume one file serves both.
+Everything that was live-broken is fixed and verified from inside the bundle:
+
+- **"Launch at login" no longer lies.** It threw on every toggle without a
+  bundle identifier, and the `catch` swallowed it, so the switch showed ON
+  having done nothing. It now reverts itself and says why. `SMAppService` is
+  reachable from the bundle; it reports `notFound` while the app lives in
+  `.build/`, which is expected — login items must register from a stable
+  install location. Recheck after the first real install.
+- **Version.** `dev` → `0.1.2 (44)`.
+- `UserDefaults` moves from the executable name to the bundle id, so dev
+  settings reset once. Accepted rather than migrated: the app has never
+  shipped, so the only affected defaults are a developer's own.
+
+Two things the icon is not: it is generated from the app's own `DishArcGlyph`
+via `make icon`, so icon and menu bar cannot drift, and it carries **no
+Starlink or SpaceX mark** — Guideline 5.2 is the highest rejection risk and the
+icon is the most conspicuous place to trip it. It is a functional placeholder;
+replacing it is a design decision, not a blocker.
+
+MAS and notarized-direct still need **different** entitlement sets — the Store
+injects `application-identifier` and `team-identifier`, both requiring a real
+team ID, and direct-notarized wants the hardened runtime as a codesign flag.
+`Resources/DishWatch.entitlements` is dev/spike only. Don't assume one file
+serves all three.
 
 ## Phase 3–4 — the engine and its cost
 
@@ -295,10 +376,12 @@ Either decode `deviceInfo.id` or rename the field.
 ## Cut before submission
 
 Dev and demo scaffolding that must not ship: `Views/IconCandidates.swift` (only
-reachable from the render harness), `Render.swift` itself, the
-`simulateBattery` property, the `DISHWATCH_PROBE` path, and the hardcoded
-`~/Sites/dishwatch/bin/dishwatch` lookup in `LiveProvider` — which currently
-outranks Homebrew.
+reachable from the render harness), `Render.swift` itself (including the
+`DISHWATCH_APPICON` mode — `make icon` is a build-time tool, not a runtime
+feature), `NetProbe.swift`, the `simulateBattery` property, and the
+`DISHWATCH_PROBE` path. The hardcoded `~/Sites/dishwatch/bin/dishwatch` lookup
+in `LiveProvider` is already behind `#if DEBUG`, and `LiveProvider` itself goes
+away with Phase 3.
 
 ## Non-code work (calendar time, not coding time)
 

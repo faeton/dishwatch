@@ -210,6 +210,27 @@
   popover's "device ID" is really a hardware model string
   (`mini1_panda_prod1`). `internal/dish/status.go` doesn't decode a real device
   id at all. Decode `deviceInfo.id` or rename the field.
+- [x] **No `.app` bundle, so nothing about the App Store had been exercised.**
+  `app/Makefile` now assembles and signs one. Everything that was live-broken
+  is fixed and verified from inside the bundle: launch-at-login threw on every
+  toggle without a bundle identifier and the `catch` swallowed it, so the
+  switch showed ON having done nothing — it now reverts itself and says why;
+  the version string went from a permanent `dev` to `0.1.2 (44)`. The icon is
+  generated from the app's own `DishArcGlyph` so it cannot drift from the menu
+  bar, and carries no Starlink or SpaceX mark.
+
+  Two findings worth keeping. **A sandboxed bundle cannot run the CLI at all**
+  (`binaryNotFound`, even with an absolute `DISHWATCH_BIN`), which promotes the
+  in-process engine from optimisation to prerequisite. And **a sandboxed bundle
+  *can* reach the dish** — through `NWConnection` and a raw BSD socket alike,
+  launched via LaunchServices so the app is its own TCC-responsible process.
+  That was the gate the architecture decision was waiting on. See
+  [roadmap.md](roadmap.md#gate-result-2026-08-05-reachability-passes-on-both-stacks).
+
+  Also a self-inflicted lesson now fixed in the Makefile: `$(APP_DIR)` was a
+  file target, so `make app SANDBOX=0` after `make app` printed `sandbox=0` and
+  handed back the *sandboxed* bundle — no prerequisite had changed. That cost
+  two wrong conclusions before it was caught. It always reassembles now.
 - [ ] **No `schemaVersion`, and the DTO is hand-duplicated** between
   `dashboard.go` and `DishData.swift`. Add a version field, generate JSON
   fixtures from Go and decode them in Swift tests, and diff Go JSON tags
