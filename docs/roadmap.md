@@ -7,10 +7,11 @@
 >
 > The same spike killed the *external* subprocess bridge — sandboxed, the app
 > cannot reach a Homebrew or checkout install — but an **embedded** helper inside
-> the bundle works end to end, which opens a third architecture option and
-> de-risks the cgo one. The engine choice is genuinely still open; the
-> `internal/model` + `internal/service` split feeds all three and is the critical
-> path either way.
+> the bundle works end to end. That settled the engine question: **Option C**, a
+> long-lived embedded Go helper over pipes, chosen independently by both
+> reviewers. `dishwatch helper` exists and measures 0.014 ms of IPC overhead per
+> request, so the architecture costs nothing and the remaining latency is dish
+> RPC time every option would pay.
 >
 > This doc supersedes the original "planned, not started" roadmap, whose phase
 > order is now obsolete — the UI got built before the core split.
@@ -28,8 +29,9 @@ later. Windows is a distant secondary.
 |------|-------|
 | SwiftUI UI (6 screens, menu bar, pinned panel, settings) | **done** — builds clean, macOS 14+ |
 | `DishProvider` protocol seam | **done** — the swap point for any backend |
-| Live data | **bridge only**, and the bridge is dead under the sandbox — see the gate result |
+| Live data | `dishwatch helper` **built and measured**; Swift still on the old spawn-per-poll bridge |
 | `.app` bundle / Info.plist / entitlements / signing | **done** — `make app`, ad-hoc signed, sandboxed |
+| Engine decision (A/B/C) | **settled — C**, long-lived embedded helper over pipes |
 | `internal/model` + `internal/service` split | **not started** |
 | Sandbox + reachability | **exercised** — sandboxed bundle reaches the dish; embedded helper runs |
 | Local-network TCC first-run / prompt | **not exercised** — needs a clean account + Apple-issued identity |
@@ -56,10 +58,11 @@ resolver. Also, `dishkit` **must live inside the dishwatch module** — Go's
 `internal/` rule forbids an external module from importing
 `github.com/faeton/dishwatch/internal/...`.
 
-## Open decision: what backs the App Store build?
+## Settled: what backs the App Store build
 
-Two independent reviews split on this, so it is recorded as **open**, to be
-settled by an experiment rather than by argument.
+Two review rounds split on this, so it was held open and settled by experiment
+rather than argument. **The answer is Option C** — see the decision below the
+three options.
 
 **Option A — Go core in-process via `-buildmode=c-archive`** (the original plan)
 
@@ -90,30 +93,53 @@ spike; see below)*
   over a pipe (at which point it is an XPC-shaped design in disguise) or a much
   slower cadence. Ships a second executable through review.
 
-**How we decide — the deciding risk was TCC, and TCC did not veto.** The thing
-that could have threatened this app was whether a *sandboxed, signed* `.app`
-can reach `192.168.100.1` at all. It can (below). With the veto gone, this is
-no longer an experiment-settled question but an ordinary engineering trade, and
-the honest summary of the two reviews is that they disagree:
+**Decision (2026-08-05): Option C.** Both reviewers picked it independently on
+a second pass, and Grok explicitly retracted its earlier recommendation of B.
+The reachability gate below removed the veto that made B attractive
+("maybe we can't run Go under the sandbox"), and the embedded-helper probe then
+turned C from forbidden into demonstrated.
 
-|  | A — c-archive | B — pure Swift | C — embedded helper |
-|---|---|---|---|
-| One implementation of the Wh math | **yes** | no — port + goldens | **yes** |
-| Go runtime resident in the menu bar | yes | no | no (child only) |
-| Idiomatic `NWConnection`, path monitor, battery APIs | second-class | **first-class** | second-class |
-| Build complexity | dual toolchain, per-arch archives | **one stack** | dual toolchain, simple link |
-| Poll cost | 61–91 ms | comparable, in-process | ~700 ms unless long-lived |
-| New code to write | cgo glue + worker queue | transport + integrators | **almost none** |
+Why C over A, in the reviewers' words rather than mine: the deciding argument
+is blast radius, not speed. A cgo fault takes the menu bar down with it; a
+helper that dies is a helper the app restarts. And A's least-tested part —
+embedding the Go runtime in Swift's address space, entered from arbitrary GCD
+threads — is precisely what C never does.
 
-Grok argues for **B**, on the grounds that an always-on menu-bar process should
-optimise for resident cost and platform fit, and that the numeric logic worth
-protecting is small enough to share as a spec plus golden vectors rather than
-as a linked runtime. Codex declines to call **A** cleared until a real archive
-completes a gRPC call from inside the sandbox. Neither had **C** available when
-they reviewed.
+Why C over B: B duplicates far more than "three small formulas". `integrateStats`
+owns persisted cursors, reboot epochs, ring-gap rules and outage segmentation —
+a persistence authority, not arithmetic. B would have to reproduce those rules
+or invent a second authority. Golden vectors make B respectable but, per Grok,
+"delay the crash; they do not remove the second codebase", and the thing that
+rots first is the JSON/UI contract rather than the integrators.
 
-This is a maintenance-and-taste call, not a technical unknown, so it is
-recorded as open rather than resolved by fiat.
+**And a legal caveat that on its own disqualifies B for a first release.**
+Vendoring the proto means redistributing descriptors extracted from the dish.
+Starlink's software terms reserve their software IP and restrict deriving
+source from binary software; whether reading an intentionally exposed
+reflection API for interoperability falls inside that is a legal
+interpretation, not an engineering fact. Extracting locally to test is fine.
+Checking it into a public repo and shipping it in an App Store binary is not
+something to do without advice. This repo is public.
+
+### What C measured (2026-08-05, live dish)
+
+| | |
+|---|---|
+| Warm poll through the helper | **median 274 ms**, min 150 ms (vs **696 ms** spawn-per-poll) |
+| IPC round trip, no dish (`ping` op, n=200) | **0.014 ms** median, 0.024 ms p95 |
+| Helper RSS, connection held | 22.9 MB at start → **30.8 MB** after polls, flat |
+| Helper CPU, idle with connection open | **0.0%** |
+
+The second row is the one that decides A vs C: **the architecture costs
+14 microseconds**. The remaining 274 ms is dish RPC time, which every option
+pays identically — so A's 61–91 ms figure was never about being in-process, it
+was about connection reuse, which C has too. There is no performance argument
+left for cgo.
+
+Still outstanding, per both reviewers: a sustained idle soak measuring combined
+app+helper Energy Impact and wakeups, not just RSS. C **relocates** the Go
+runtime, it does not remove it, and the roadmap said otherwise in an earlier
+draft.
 
 ### Gate result (2026-08-05): reachability passes, on both stacks
 

@@ -82,6 +82,15 @@ func CacheDir() (string, error) {
 // blend of both. The transaction lock in lock.go makes that unreachable for Go
 // callers, but a unique name means a stray concurrent writer corrupts only its
 // own temp file rather than the file we are about to publish.
+// WriteFileAtomic is writeFileAtomic for callers outside this package that
+// store their own files in the cache directory — the power-bank anchor, today.
+// Exported rather than duplicated so there is one place where "publish a file"
+// is defined, and so the next such file cannot quietly reintroduce the fixed
+// temp name.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm)
+}
+
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {

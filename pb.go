@@ -68,11 +68,58 @@ func saveAnchor(a *Anchor) error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
+	// Was a fixed "<path>.tmp", which is the same trap fixed in state.Save and
+	// in the bash `sl`: the rename is atomic, but two writers open the *same*
+	// scratch path and interleave their bytes before either renames.
+	return state.WriteFileAtomic(p, b, 0o644)
+}
+
+// setAnchor pins a bank percentage to the energy total as it stands right now,
+// and is the single writer of the anchor for both the CLI and the helper.
+//
+// The whole thing runs under the state lock, not just the save. The anchor is
+// only meaningful as a *pair* — this percentage at that energyWh — so a poll
+// landing between the read and the write leaves every later runtime estimate
+// off by the delta, permanently and invisibly. Reading the previous capacity
+// has to be inside too: `wh == nil` means "keep what was there", and a
+// concurrent `pb` swapping capacity underneath us would otherwise get the old
+// figure republished against the new percentage.
+//
+// Deliberately does not refresh state itself. The CLI polls immediately before
+// calling; the helper polls on its own cadence and would only be re-entering
+// its own transaction.
+func setAnchor(pct float64, wh *float64) (*Anchor, error) {
+	if pct < 0 || pct > 100 {
+		return nil, fmt.Errorf("invalid pct: %v", pct)
 	}
-	return os.Rename(tmp, p)
+	if wh != nil && *wh <= 0 {
+		return nil, fmt.Errorf("invalid wh: %v", *wh)
+	}
+
+	txn, _ := state.Begin()
+	defer txn.Close()
+
+	snap, err := state.Load()
+	if err != nil || snap == nil {
+		return nil, fmt.Errorf("no state yet — is the dish reachable?")
+	}
+
+	a := &Anchor{
+		Pct:      pct,
+		EnergyWh: snap.EnergyWh,
+		Uptime:   snap.UptimeS,
+		Boots:    snap.Boots,
+		TS:       time.Now().Unix(),
+	}
+	if wh != nil {
+		a.Wh = *wh
+	} else if prev, _ := loadAnchor(); prev != nil {
+		a.Wh = prev.Wh
+	}
+	if err := saveAnchor(a); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func deleteAnchor() error {
@@ -149,23 +196,12 @@ func runPb(ctx context.Context, args []string) error {
 		return fmt.Errorf("no state yet — is the dish reachable?")
 	}
 
-	// If wh not given this time, preserve the prior wh from the existing
-	// anchor (matches bash).
-	if wh == 0 {
-		if prev, _ := loadAnchor(); prev != nil {
-			wh = prev.Wh
-		}
+	var whp *float64
+	if wh > 0 {
+		whp = &wh
 	}
-
-	a := &Anchor{
-		Pct:      pct,
-		Wh:       wh,
-		EnergyWh: snap.EnergyWh,
-		Uptime:   snap.UptimeS,
-		Boots:    snap.Boots,
-		TS:       time.Now().Unix(),
-	}
-	if err := saveAnchor(a); err != nil {
+	a, err := setAnchor(pct, whp)
+	if err != nil {
 		return err
 	}
 	whStr := "—"

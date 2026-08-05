@@ -15,6 +15,12 @@ import (
 	"github.com/faeton/dishwatch/internal/state"
 )
 
+// version is stamped by the linker: -X main.version=$(VERSION). The Makefile
+// has always passed that flag, but the symbol did not exist, and -X against a
+// missing symbol is silently ignored — so every build so far has been
+// unversioned without saying so.
+var version = "dev"
+
 func parsePositiveInt(s string) (int, error) {
 	n, err := strconv.Atoi(s)
 	if err != nil {
@@ -74,6 +80,12 @@ func main() {
 		}
 	case "json":
 		if err := runJSON(ctx); err != nil {
+			die(err)
+		}
+	// Private: the engine the macOS app supervises. Not in the usage line —
+	// it speaks a line protocol on stdout and is useless from a terminal.
+	case "helper":
+		if err := runHelper(ctx); err != nil {
 			die(err)
 		}
 	case "pb":
