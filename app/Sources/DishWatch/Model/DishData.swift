@@ -64,6 +64,10 @@ struct DishData: Decodable, Sendable {
 
     var dishAddr: String = ""
 
+    /// Observed-session aggregates, or `nil` when the footer must not render.
+    /// Decoded as one block — see `ObservedStats`.
+    var observed: ObservedStats? = nil
+
     // ---- power-bank mode ----
     // Off unless the CLI has an anchor set (`sl pb`). With pb disabled the dish
     // is treated as on mains and no battery UI appears.
@@ -82,6 +86,103 @@ struct DishData: Decodable, Sendable {
         let h = bankSecondsLeft / 3600
         let m = (bankSecondsLeft % 3600) / 60
         return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+    }
+}
+
+// MARK: - Observed session
+
+/// The `Observed` footer's data, decoded **all or nothing**.
+///
+/// Every other field on `DishData` degrades individually to a neutral default,
+/// which is right for a metric grid where a zero reads as "no reading". It is
+/// wrong here, and the reason is what the word "Observed" is for: the footer is
+/// the app's honesty claim about long-window link quality (docs/macos-ui.md), so
+/// a partially-decoded one states figures it cannot support. Per-field zero
+/// defaults are not enough either — they handle a payload with none of these
+/// keys, but a payload missing only `sessDownPeak` would still render
+/// `peak ↓0 · 0 W` beside a real duration and a real ping.
+///
+/// This is not hypothetical version skew. `app/README.md` already warns that a
+/// Homebrew `dishwatch` predating the `json` command won't work, and an older
+/// CLI that emits the `sess*` block incompletely is exactly the expected shape
+/// of that drift.
+///
+/// So: stored properties are non-optional `let`s with no defaults, which makes
+/// the synthesised `Decodable` strict. Any missing or wrong-typed key throws,
+/// `decode(from:)` maps that to `nil`, and the view hides the whole row. The
+/// keys are flat in the payload rather than nested, so this decodes from the
+/// same top-level container as `DishData` (see its `init(from:)`).
+struct ObservedStats: Decodable, Sendable, Equatable {
+    /// Below this the CLI has not collected enough samples to summarise, and
+    /// emits zeros across the block. Mirrors `Stats.Ready()` in the Go side —
+    /// if that threshold moves, this moves with it.
+    static let minSeconds: Int64 = 120
+
+    let seconds: Int64
+    let coverage: Double
+    let pingAvg: Double
+    let cleanPct: Double
+    let degradedPct: Double
+    let darkPct: Double
+    let outages: Int
+    let outageSeconds: Int64
+    let longestOutage: Int64
+    let downPeak: Double
+    let upPeak: Double
+    let downBytes: Double
+    let upBytes: Double
+    let powerAvg: Double
+    let powerPeak: Double
+
+    enum CodingKeys: String, CodingKey {
+        case seconds       = "obsSeconds"
+        case coverage      = "obsCoverage"
+        case pingAvg       = "sessPingAvg"
+        case cleanPct      = "sessCleanPct"
+        case degradedPct   = "sessDegradedPct"
+        case darkPct       = "sessDarkPct"
+        case outages       = "sessOutages"
+        case outageSeconds = "sessOutageSeconds"
+        case longestOutage = "sessLongestOutage"
+        case downPeak      = "sessDownPeak"
+        case upPeak        = "sessUpPeak"
+        case downBytes     = "sessDownBytes"
+        case upBytes       = "sessUpBytes"
+        case powerAvg      = "sessPowerAvg"
+        case powerPeak     = "sessPowerPeak"
+    }
+
+    // `sessDropAvg` is deliberately absent. The Go side emits it, but
+    // docs/macos-ui.md rules it out of the UI — a mean loss figure names a
+    // state a moving dish is rarely in. Not decoding it means no view can
+    // reach for it by accident.
+
+    /// Returns `nil` rather than throwing, because every reason to fail here —
+    /// old CLI, short session, garbage number — has the same correct response:
+    /// don't draw the row.
+    static func decode(from decoder: Decoder) -> ObservedStats? {
+        guard let o = try? ObservedStats(from: decoder), o.isPresentable else { return nil }
+        return o
+    }
+
+    /// A decoded block still has to be worth showing.
+    ///
+    /// The readiness check is the load-bearing half: zeros across the block are
+    /// the CLI's "fewer than 120 samples" contract, not statistics, and nothing
+    /// in the decode itself distinguishes them from a real all-zero session.
+    ///
+    /// The finiteness check is defence in depth and, measured, currently
+    /// unreachable through JSON — `JSONDecoder` rejects an out-of-range literal
+    /// before this ever runs. It is here for the in-process provider the
+    /// roadmap's Phase 3 replaces the subprocess with, which will build this
+    /// struct directly from a division that can produce a NaN rather than from
+    /// a parsed document. Kept as a predicate on the value, not on the decode,
+    /// so that path can use it too.
+    var isPresentable: Bool {
+        guard seconds >= Self.minSeconds else { return false }
+        return [coverage, pingAvg, cleanPct, degradedPct, darkPct,
+                downPeak, upPeak, downBytes, upBytes, powerAvg, powerPeak]
+            .allSatisfy(\.isFinite)
     }
 }
 
@@ -124,6 +225,15 @@ extension DishData {
         d.powerSeries = [22.6, 23.1, 22.2, 24.0, 21.8, 23.0, 21.2, 24.1, 22.5, 21.9, 23.0, 21.4, 22.6, 20.9, 23.4, 22.3]
         d.powerAvg = 22.8
         d.dishAddr = "192.168.100.1"
+        // Built explicitly, never decoded — the whole point of splitting sample
+        // data from decode fallbacks.
+        d.observed = ObservedStats(
+            seconds: 8040, coverage: 0.94, pingAvg: 29,
+            cleanPct: 92, degradedPct: 6, darkPct: 2,
+            outages: 11, outageSeconds: 143, longestOutage: 58,
+            downPeak: 186, upPeak: 41,
+            downBytes: 4.2e9, upBytes: 0.6e9,
+            powerAvg: 23.8, powerPeak: 48.1)
         d.bankPct = 78
         d.bankWh = 67
         d.bankWhLeft = 52.3
@@ -186,6 +296,9 @@ extension DishData {
         d.powerSeries = s(.powerSeries, d.powerSeries)
         d.powerAvg = s(.powerAvg, d.powerAvg)
         d.dishAddr = s(.dishAddr, d.dishAddr)
+        // Same decoder, not a nested container: the sess*/obs* keys are flat in
+        // the payload. All-or-nothing, unlike every line above it.
+        d.observed = ObservedStats.decode(from: decoder)
         d.onBattery = s(.onBattery, d.onBattery)
         d.bankAnchored = s(.bankAnchored, d.bankAnchored)
         d.bankPct = s(.bankPct, d.bankPct)

@@ -160,7 +160,7 @@ folded samples are real recorded seconds; the tooltip is what had to change.
 
 | File | Change |
 |---|---|
-| `Model/DishData.swift` | add the `obs*` / `sess*` fields + `CodingKeys` entries; they decode resiliently like the rest |
+| `Model/DishData.swift` | **done** — the block decodes as one optional `ObservedStats`, all-or-nothing. Emphatically *not* "resiliently like the rest": per-key fallbacks would render `peak ↓0 · 0 W` from a payload missing one key, under the word that carries the honesty claim. `nil` → hide the row |
 | `Views/ConnectedPopover.swift:89-91` | retitle the spark block `Last 60 s`; drop the Down trailing; keep ping/power trailings |
 | `Views/ConnectedPopover.swift` | add the session footer row below the sparklines |
 | `Views/CompactWidget.swift:58-59` | replace `avg \(Int(d.downAvg))` / `avg \(Int(d.upAvg))` with `peak` from the session fields |

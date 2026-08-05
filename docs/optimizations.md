@@ -153,10 +153,33 @@
   present. Rule: absent `obsSeconds`, or `< 120`, or any rendered field missing
   or wrong-typed → `nil` → hide the whole footer. `SampleProvider` constructs
   the block explicitly. This is scoped to one struct, so it does **not** have
-  to wait on the full strict-decode/`schemaVersion` rework. Also fix
-  macos-ui.md's "Files to change" row so it stops saying "like the rest", and
-  define the `CompactWidget` cold-start string — `—`, never `peak 0` and never
-  a silent fall back to the 60 s mean.
+  to wait on the full strict-decode/`schemaVersion` rework.
+
+  **Done.** `ObservedStats` is a struct of non-optional `let`s, which makes the
+  synthesised `Decodable` strict; it decodes from the same top-level container
+  as `DishData` because the keys are flat, and `decode(from:)` maps any throw
+  to `nil`. `sessDropAvg` is deliberately not decoded at all — macos-ui.md
+  rules it out of the UI, so no view can reach for it by accident.
+
+  This also brought the first Swift tests into the repo: 11 of them, including
+  a golden fixture captured from `dishwatch json` against the live dish (device
+  id redacted), which is the cheap half of the Phase 5 contract work — it
+  catches a Go JSON tag and a Swift `CodingKey` drifting apart, which
+  hand-written fixtures cannot. Both guards were negative-controlled: making
+  one field optional (exactly the "resilient like the rest" shape the doc
+  originally proposed) fails `testEveryKeyIsRequired` and
+  `testOneMissingKeyDropsTheWholeBlock`; dropping the readiness gate fails
+  `testBelowReadinessThresholdIsNil`.
+
+  One honest note: the finiteness half of `isPresentable` is currently
+  unreachable via JSON, since `JSONDecoder` rejects an out-of-range literal
+  first. It is kept for the Phase 3 in-process provider, which will build the
+  struct from arithmetic rather than a document, and is commented as such.
+
+  Still open from this item: macos-ui.md's "Files to change" row is fixed, but
+  the `CompactWidget` cold-start string is not — define it as `—`, never
+  `peak 0` and never a silent fall back to the 60 s mean. That lands with the
+  footer UI in Phase 5a.
 - [x] **`integrateStats` folds across gaps, which contradicted what the footer
   claimed.** The non-reboot path is `n = cur - st.LastCurrent`, so any gap
   **within** the ring was folded in wholesale while the tooltip read *"Stats
