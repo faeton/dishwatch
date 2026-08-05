@@ -231,6 +231,17 @@
   file target, so `make app SANDBOX=0` after `make app` printed `sandbox=0` and
   handed back the *sandboxed* bundle — no prerequisite had changed. That cost
   two wrong conclusions before it was caught. It always reassembles now.
+- [x] **Outage runs were welded across a dropped gap.** Found by Codex reviewing
+  the fold-forward settlement, and neither of us caught it while making that
+  change. `CurrentOutageS` is persisted, so when a gap wider than the ring set
+  `n = 0` and skipped `accumulate`, an outage in progress stayed open — and the
+  next dark sample continued it. Two separate outages either side of an
+  unmeasured hole were reported as one, inflating `LongestOutage` by the gap
+  and undercounting `Outages`, while the tooltip claimed gaps past the ring are
+  excluded entirely. `closeOutage` now banks the run at the last second we
+  actually saw, and is shared with the normal end-of-run path.
+  `TestIntegrateStatsClosesOutageAcrossAGapWiderThanRing` fails without it
+  (`OutageCount = 0, want 1`).
 - [ ] **No `schemaVersion`, and the DTO is hand-duplicated** between
   `dashboard.go` and `DishData.swift`. Add a version field, generate JSON
   fixtures from Go and decode them in Swift tests, and diff Go JSON tags

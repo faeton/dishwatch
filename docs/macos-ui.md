@@ -131,7 +131,16 @@ Use the existing `HumanDur` style for the duration: `12m`, `2h 14m`, `1d 3h`.
 Not `Session`, not `Today`, not `Since boot`. **`Observed` is the disclaimer** —
 it claims only the seconds we actually hold a sample for, and quietly declines
 to claim anything about the rest. That is why no second caveat line is needed
-underneath, and why the tooltip is optional rather than load-bearing.
+underneath.
+
+**The tooltip is load-bearing, though, and saying otherwise was wishful.** Once
+the fold recovers samples from a window the user had the app closed for,
+"Observed" is a claim about *sample provenance*, not about app presence — and
+ordinary English hears the second one. Someone who quits for ten minutes and
+returns to `Observed 2h 14m` will reasonably read it as "while DishWatch was
+watching". The catch-up rule is what closes that gap, so it has to be reachable
+from the UI rather than living only in this file. Never phrase the row, its
+tooltip, or any settings copy as "while the app was running".
 
 Two consequences that must hold or the word becomes a lie:
 
@@ -154,7 +163,9 @@ up to the 15-minute ring is recovered in full, and a gap wider than the ring
 contributes **nothing** — not even the portion still sitting in the buffer, and
 that under-claim is intentional. Consequence #2 still holds throughout, because
 folded samples are real recorded seconds; the tooltip is what had to change.
-`sessionstats_test.go` pins both halves of this envelope.
+`integratestats_test.go` pins all three halves of this envelope: the fold, the
+drop, and — because a run in progress must not be welded across a hole we never
+measured — the outage that gets closed when the gap is dropped.
 
 ## Files to change
 

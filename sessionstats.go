@@ -59,6 +59,15 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 			// Advance the cursor and keep the accumulators; the missing time
 			// is simply not counted as observed.
 			n = 0
+			// But an outage run in progress has to be closed, not carried
+			// across the hole. `CurrentOutageS` is persisted state, so leaving
+			// it open lets the next dark sample continue a run that ended an
+			// unknown length of time ago: two separate outages either side of
+			// a gap get reported as one, inflating `LongestOutage` by the
+			// unmeasured middle and undercounting `Outages`. We cannot know
+			// what happened in the gap — which is exactly why the run has to
+			// end at the last second we actually saw.
+			closeOutage(st)
 		}
 		if n < 0 {
 			n = 0
@@ -81,6 +90,20 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 	st.LastTs = now
 	_ = state.SaveStats(st)
 	return st
+}
+
+// closeOutage ends an outage run in progress, banking it into the count and
+// the longest-run high-water mark. A no-op when no run is open, so callers can
+// use it as "whatever was running, it stops here".
+func closeOutage(st *state.Stats) {
+	if st.CurrentOutageS <= 0 {
+		return
+	}
+	st.OutageCount++
+	if st.CurrentOutageS > st.LongestOutageS {
+		st.LongestOutageS = st.CurrentOutageS
+	}
+	st.CurrentOutageS = 0
 }
 
 // accumulate folds the n samples ending at cursor `cur` into st. It is the
@@ -115,12 +138,8 @@ func accumulate(st *state.Stats, h *dish.History, cur, n int64) {
 		if drop >= state.OutageThreshold {
 			st.OutageSeconds++
 			st.CurrentOutageS++
-		} else if st.CurrentOutageS > 0 {
-			st.OutageCount++
-			if st.CurrentOutageS > st.LongestOutageS {
-				st.LongestOutageS = st.CurrentOutageS
-			}
-			st.CurrentOutageS = 0
+		} else {
+			closeOutage(st)
 		}
 
 		// Only trust latency when at least one packet returned. A fully dark

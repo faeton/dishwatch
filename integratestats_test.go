@@ -123,6 +123,45 @@ func TestIntegrateStatsFoldsGapsInsideRing(t *testing.T) {
 	}
 }
 
+// A gap wider than the ring must also end any outage run in progress.
+//
+// `CurrentOutageS` is persisted, so a run left open when we skip a gap gets
+// continued by the next dark sample — welding two separate outages into one
+// across a hole we never measured. That inflates the longest run by the
+// unmeasured middle and reports one outage where there were two, while the
+// tooltip claims gaps beyond the ring are excluded entirely.
+func TestIntegrateStatsClosesOutageAcrossAGapWiderThanRing(t *testing.T) {
+	state.SetDir(t.TempDir())
+	t.Cleanup(func() { state.SetDir("") })
+
+	// A ring whose last samples are dark: the session ends mid-outage.
+	darkTail := ring(strings.Repeat("c", 895) + strings.Repeat("d", 5))
+	darkTail.Current = 900
+	st := integrateStats(statusAt(1, 900), darkTail, 1_700_000_000)
+	if st.CurrentOutageS != 5 {
+		t.Fatalf("setup CurrentOutageS = %d, want 5 — the run must be open", st.CurrentOutageS)
+	}
+	if st.OutageCount != 0 {
+		t.Fatalf("setup OutageCount = %d, want 0 — the run has not ended yet", st.OutageCount)
+	}
+
+	// Two hours later, far past the 900-sample ring. Nothing in between is
+	// recoverable, so the run we were in ended at the last sample we saw.
+	darkHead := ring(strings.Repeat("d", 3) + strings.Repeat("c", 897))
+	darkHead.Current = 8100
+	st = integrateStats(statusAt(1, 8100), darkHead, 1_700_007_200)
+
+	if st.OutageCount != 1 {
+		t.Errorf("OutageCount = %d, want 1 — the pre-gap run must be banked", st.OutageCount)
+	}
+	if st.LongestOutageS != 5 {
+		t.Errorf("LongestOutageS = %d, want 5 — not the gap's width", st.LongestOutageS)
+	}
+	if st.CurrentOutageS != 0 {
+		t.Errorf("CurrentOutageS = %d, want 0 — nothing may carry across the gap", st.CurrentOutageS)
+	}
+}
+
 // A dish answering get_status but not get_history is a transient. It must leave
 // the accumulator alone rather than resetting or double-counting it.
 func TestIntegrateStatsWithoutHistoryIsInert(t *testing.T) {

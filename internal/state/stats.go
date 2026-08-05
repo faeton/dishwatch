@@ -19,7 +19,17 @@ import (
 //
 // The epoch is one dish boot: a reboot resets every accumulator, because the
 // dish's own counters reset and averaging across the discontinuity would be a
-// lie. Within that epoch, gaps (CLI not running) simply contribute no samples.
+// lie.
+//
+// Within that epoch, a gap does *not* automatically contribute nothing — an
+// earlier version of this comment said it did, and that was the same wrong
+// story the footer tooltip used to tell. The next poll folds forward every
+// sample since the stored cursor, so a gap the dish's 15-minute ring still
+// covers is recovered in full. That is the point: it is what lets a slow poll
+// cadence describe the interval between polls rather than the one second it
+// asked on. Only a gap wider than the ring contributes nothing, and then it
+// contributes nothing at all — not even the part still buffered. See
+// docs/macos-ui.md and integratestats_test.go.
 type Stats struct {
 	Version     int   `json:"version"`     // bumped when field semantics change → reset
 	Boots       int   `json:"boots"`       // epoch guard — reset when this changes

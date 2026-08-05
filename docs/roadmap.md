@@ -5,10 +5,12 @@
 > has been run against a live dish rather than argued about — a sandboxed bundle
 > **can** reach `192.168.100.1`, through both candidate network stacks.
 >
-> The same spike killed the subprocess bridge: sandboxed, the app cannot execute
-> the CLI at all. So Phase 3 (in-process engine) moves from optimisation to
-> prerequisite, and the `internal/model` + `internal/service` split that feeds it
-> is the critical path.
+> The same spike killed the *external* subprocess bridge — sandboxed, the app
+> cannot reach a Homebrew or checkout install — but an **embedded** helper inside
+> the bundle works end to end, which opens a third architecture option and
+> de-risks the cgo one. The engine choice is genuinely still open; the
+> `internal/model` + `internal/service` split feeds all three and is the critical
+> path either way.
 >
 > This doc supersedes the original "planned, not started" roadmap, whose phase
 > order is now obsolete — the UI got built before the core split.
@@ -29,7 +31,8 @@ later. Windows is a distant secondary.
 | Live data | **bridge only**, and the bridge is dead under the sandbox — see the gate result |
 | `.app` bundle / Info.plist / entitlements / signing | **done** — `make app`, ad-hoc signed, sandboxed |
 | `internal/model` + `internal/service` split | **not started** |
-| Sandbox, local-network TCC, `SMAppService` | **exercised** — reachability passes, login item reachable |
+| Sandbox + reachability | **exercised** — sandboxed bundle reaches the dish; embedded helper runs |
+| Local-network TCC first-run / prompt | **not exercised** — needs a clean account + Apple-issued identity |
 | Tests (Go or Swift) | **Go: energy/stats/ring/store. Swift: 11, incl. a golden fixture** |
 
 ### Measurements (2026-08-04, live dish, darwin/arm64)
@@ -76,11 +79,41 @@ settled by an experiment rather than by argument.
   a second language — the exact drift risk the original architecture existed to
   avoid. Makes proto vendoring a prerequisite rather than an optional cleanup.
 
-**How we decide — the deciding risk is not cgo, it's TCC.** The thing that
-actually threatens this app is whether a *sandboxed, signed* `.app` can reach
-`192.168.100.1` at all. Local Network permission has a track record of working
-in Terminal and silently failing inside a sandboxed bundle, and that risk
-applies to **both** options.
+**Option C — embed the CLI as a helper inside the bundle** *(discovered by the
+spike; see below)*
+
+- *For:* reuses the Go core whole with **no cgo, no c-archive, no dual math and
+  no Go runtime resident in the menu-bar process**. Verified working end to end
+  under the sandbox. Smallest amount of new code by a wide margin.
+- *Against:* keeps the ~700 ms spawn-and-dial per poll, which is the cost
+  Phase 3 exists to remove — so it needs either a long-lived helper speaking
+  over a pipe (at which point it is an XPC-shaped design in disguise) or a much
+  slower cadence. Ships a second executable through review.
+
+**How we decide — the deciding risk was TCC, and TCC did not veto.** The thing
+that could have threatened this app was whether a *sandboxed, signed* `.app`
+can reach `192.168.100.1` at all. It can (below). With the veto gone, this is
+no longer an experiment-settled question but an ordinary engineering trade, and
+the honest summary of the two reviews is that they disagree:
+
+|  | A — c-archive | B — pure Swift | C — embedded helper |
+|---|---|---|---|
+| One implementation of the Wh math | **yes** | no — port + goldens | **yes** |
+| Go runtime resident in the menu bar | yes | no | no (child only) |
+| Idiomatic `NWConnection`, path monitor, battery APIs | second-class | **first-class** | second-class |
+| Build complexity | dual toolchain, per-arch archives | **one stack** | dual toolchain, simple link |
+| Poll cost | 61–91 ms | comparable, in-process | ~700 ms unless long-lived |
+| New code to write | cgo glue + worker queue | transport + integrators | **almost none** |
+
+Grok argues for **B**, on the grounds that an always-on menu-bar process should
+optimise for resident cost and platform fit, and that the numeric logic worth
+protecting is small enough to share as a spec plus golden vectors rather than
+as a linked runtime. Codex declines to call **A** cleared until a real archive
+completes a gRPC call from inside the sandbox. Neither had **C** available when
+they reviewed.
+
+This is a maintenance-and-taste call, not a technical unknown, so it is
+recorded as open rather than resolved by fiat.
 
 ### Gate result (2026-08-05): reachability passes, on both stacks
 
@@ -107,39 +140,88 @@ inherit a grant Terminal already holds and report a success that predicts
 nothing. The probe reports which case it was in, and the table above is the
 self-responsible one.
 
-**Two honest caveats.** No Local Network permission prompt appeared, and no
+**What this exercised is connectivity, not the permission narrative.** Both
+reviewers flagged the distinction and it matters, because App Review cares
+about the second one. No Local Network prompt appeared and no
 `kTCCServiceLocalNetwork` row exists for the app — but that service lives in
 the root-owned system TCC database, so whether a grant was recorded silently or
 the prompt simply doesn't fire for unicast TCP to a private address on macOS
-26.5.2 is not something this spike can distinguish. Either way the **first-run
-prompt path is still unexercised**, so the engine must keep the retry/backoff
-and visible permission state the App Review checklist calls for. And this is one
-machine on one OS version; it is evidence, not a guarantee.
+26.5.2 is not something this can distinguish. Treat "no prompt" as **unknown
+policy path**, not as solved.
 
-**So the architecture question is no longer gated on reachability.** Neither
-option is blocked, which means the choice falls back to the ordinary trade —
-one implementation of the energy integrator versus a smaller always-on process
-— rather than to a risk. Option A's code-reuse argument now wins by default,
-because the thing that could have vetoed it didn't. Confirming it end to end
-still wants the real `c-archive` linked in, since a raw socket is a proxy for
-Go's net stack rather than Go's net stack itself.
+Three further limits on the evidence, all real:
 
-### What the same spike *did* kill: the subprocess bridge
+- **Ad-hoc signing is a partial proxy.** It genuinely activates the sandbox and
+  its entitlements, so the sandbox half is sound. It says nothing about Store
+  distribution identity, receipts, or the review environment — and Apple
+  recommends an Apple-issued identity for reliable local-network attribution,
+  which makes ad-hoc especially weak evidence about TCC *persistence*.
+- **One machine, one OS version.** Local Network behaviour has moved across
+  releases. Re-run on a clean user account with an Apple-issued identity before
+  trusting the first-run story, and record prompt, denial, retry and
+  next-launch behaviour.
+- **`isatty` is not proof of responsible-code identity.** The methodology is
+  sound because the launch used `open`, not because that heuristic validates
+  it; plenty of non-interactive shell launches also lack a TTY.
 
-Sandboxed, the app cannot find or execute the CLI at all — `PROBE ERR
-binaryNotFound`, even with `DISHWATCH_BIN` pointing at an absolute path.
-Verified as an A/B with only `com.apple.security.app-sandbox` flipped and
-everything else — same binary, same hardened runtime, same ad-hoc signature —
+So the engine keeps the retry/backoff and visible permission state the App
+Review checklist calls for, and "TCC exercised" is not a claim this makes.
+
+**So reachability no longer vetoes anything — but that is all it establishes.**
+Both reviewers pushed back on the stronger conclusion drafted here first, and
+they were right: "the gate cleared A" is an opinion wearing an implication's
+clothes. Removing a veto returns the decision to an ordinary trade, and a
+raw socket is a proxy for Go's net stack rather than Go's net stack. What
+narrows Option A's remaining risk is the embedded-helper result below, not this
+table.
+
+### What the spike killed, and what it didn't
+
+Sandboxed, the app cannot reach a CLI installed **outside the bundle** —
+`PROBE ERR binaryNotFound`, even with `DISHWATCH_BIN` pointing at an absolute
+path. A/B'd with only `com.apple.security.app-sandbox` flipped, everything else
 held constant.
 
-That promotes Phase 3 from optimisation to prerequisite. Killing the subprocess
-was previously justified by the 696 ms poll cost; it is now the only way any
-App Store build works at all, under either option. The bridge remains fine for
-unsandboxed development and nothing else.
+The first draft of this section read that as "a sandboxed app cannot execute
+the CLI." That was wrong, and Codex caught it: Apple explicitly supports
+**embedded** command-line tools that inherit the containing app's sandbox. So
+it was tested rather than argued —
 
-Do not finish Swift features or polish UI before that. Do not extract the Go
-core "for dishkit" before it either — extract it because the CLI needs it (it
-does), which is true under both options.
+```sh
+cp bin/dishwatch .build/DishWatch.app/Contents/MacOS/dishwatch-helper
+codesign --force --sign - --options runtime .../dishwatch-helper
+DISHWATCH_BIN=.../dishwatch-helper DISHWATCH_PROBE=1 .../DishWatch
+→ PROBE OK state=Connected signal=76 … hw=Mini fw=2026.07.24
+```
+
+The full chain works: the sandboxed app spawns the embedded helper, the helper
+dials the dish over gRPC, decodes via server reflection, and writes state into
+`~/Library/Containers/com.faeton.dishwatch/Data/.cache/sl/` — the container,
+with the real `~/.cache/sl` untouched, exactly as `state.SetDir` intends.
+
+Two consequences.
+
+1. **This is a third architecture option**, call it **Option C — embed the CLI
+   as a helper.** It reuses the Go core whole, with no cgo, no c-archive, no
+   dual math, and no Go runtime resident in the menu-bar process. It keeps the
+   ~700 ms spawn-and-dial cost per poll, which is exactly what Phase 3 was
+   meant to remove, so it is not obviously good — but it is now *possible*,
+   which it was not before this test, and it should be priced rather than
+   assumed away.
+2. **It substantially de-risks Option A.** The helper is Go's real net stack —
+   runtime poller, resolver, gRPC, protoreflect — completing real RPCs inside
+   the sandbox. Option A's open risk is therefore narrowed from "does Go
+   network under the sandbox" (answered: yes) to "does it network correctly
+   when linked in-process via `c-archive`, with cgo's thread model and Swift
+   concurrency" — a real question, but a much smaller one. Confirming it still
+   wants the archive actually linked and dialing.
+
+What is *not* rescued is the current bridge, which hunts for Homebrew and
+developer checkouts. That stays dead for any Store build.
+
+Do not finish Swift features or polish UI before the engine decision. Do not
+extract the Go core "for dishkit" before it either — extract it because the CLI
+needs it (it does), which is true under all three options.
 
 ## Revised phases
 
@@ -147,8 +229,8 @@ does), which is true under both options.
 |-------|------|------|
 | ~~**0**~~ | ~~Correctness: state transaction lock, energy bootstrap, characterization tests~~ | **done** |
 | ~~**1**~~ | ~~Real `.app` bundle~~ | **done** — `make app` |
-| ~~**2**~~ | ~~**Decision spike** — sandboxed local-network reachability~~ | **done — passes on both stacks** |
-| **3** | Persistent engine behind `DishProvider`; delete the subprocess | **Now a prerequisite, not an optimisation** — the bridge cannot work sandboxed |
+| ~~**2**~~ | ~~**Decision spike** — sandboxed local-network reachability~~ | **done — no veto; A vs B vs C still open** |
+| **3** | Engine behind `DishProvider`; kill the *external* subprocess | **Prerequisite** — the external bridge cannot work sandboxed |
 | **4** | Adaptive polling, split RPCs, idle cost near zero | |
 | **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | Precondition for the `Observed` row below |
 | **5a** | Metric presentation per [macos-ui.md](macos-ui.md) — session footer, peaks over means | Needs 5, or a zero-default carve-out |
@@ -156,9 +238,10 @@ does), which is true under both options.
 | **7** | Submission + App Review | |
 | **8** | *(optional)* notarized direct build via `cmd/dishwatchd`; Windows tray | |
 
-Phase 3 is now the critical path: nothing sandboxed works until the subprocess
-is gone, so the `internal/model` + `internal/service` extraction that feeds it
-is the next real work.
+Phase 3 is the critical path: nothing sandboxed works while the app hunts for a
+CLI outside its bundle. The `internal/model` + `internal/service` extraction
+feeds every candidate engine, so it is the next real work regardless of which
+one wins.
 
 ## Phase 0 — correctness (do regardless of architecture)
 

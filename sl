@@ -56,13 +56,22 @@ call() { grpcurl -plaintext -max-time 4 -d "$1" "$DISH" "$SVC"; }
 _sl_lock() {
   command -v lockf >/dev/null 2>&1 || return 0   # no lockf: unlocked, as before
   exec 9>>"$SL_LOCK" || return 0
-  # Bounded wait: a wedged holder must not hang the CLI. On timeout we proceed
-  # unlocked rather than refusing to run — same best-effort posture as the Go
-  # side, which also continues if it cannot acquire.
+  # Bounded wait so a wedged holder cannot hang the CLI forever — but on
+  # timeout we *fail*, we do not proceed unlocked.
+  #
+  # Proceeding unlocked was the first version of this and it was wrong twice
+  # over. It abandons the guarantee precisely when contention exists, which is
+  # the only situation the lock was for; and it isn't the posture the Go side
+  # takes either. Go blocks for as long as another process holds the lock, and
+  # only continues unlocked when acquisition itself *errors* — a missing
+  # directory, not a busy peer. Ten seconds is already far longer than any
+  # honest holder needs, since the critical section is pure arithmetic with the
+  # RPCs outside it.
   if ! lockf -s -t 10 9; then
     exec 9>&-
-    printf '\e[38;5;244msl: state lock busy — continuing unlocked\e[0m\n' >&2
-    return 0
+    printf '\e[38;5;174msl: state lock held for over 10s\e[0m — another sl/dishwatch may be wedged\n' >&2
+    printf '  refusing to write state rather than racing it; retry, or check for a stuck process\n' >&2
+    return 1
   fi
 }
 _sl_unlock() { exec 9>&- 2>/dev/null || true; }
@@ -81,7 +90,11 @@ _sl_unlock() { exec 9>&- 2>/dev/null || true; }
 # temp name carries $$ so a stray concurrent writer corrupts its own scratch
 # file rather than the one we are about to publish.
 _sl_write_atomic() {
-  local path="$1" data="$2" tmp="$1.$$.tmp"
+  local path="$1" data="$2" tmp
+  # mktemp rather than "$path.$$.tmp": $$ is unique per shell, not per write,
+  # so the fixed form quietly assumes one atomic write in flight per process.
+  # That holds today and costs nothing to stop assuming.
+  tmp=$(mktemp "$path.XXXXXX") || return 1
   printf '%s' "$data" > "$tmp" && mv -f "$tmp" "$path"
 }
 
@@ -332,10 +345,11 @@ dash() {
 
   # ---- state transaction ----
   # Everything from here to _sl_diff_and_log is one read-modify-write over
-  # state.json. Holding the lock only around the write would not help: the
-  # double-count comes from two processes reading the same lastCurrent, not
-  # from their writes overlapping. See _sl_lock.
-  _sl_lock
+  # state.json. Holding the lock only around the write would not help, because
+  # the damage comes from two processes reading the same lastCurrent rather
+  # than from their writes overlapping — see _sl_lock for what that damage
+  # actually is (lost updates and state/stats skew, not double-counting).
+  _sl_lock || exit 1
 
   local PREV_BOOTS="" PREV_UPS="" PREV_ENERGY=0 PREV_LAST_CUR="" PREV_OBS_TS="" PREV_OBS_UP=""
   if [[ -s "$SL_STATE" ]]; then
@@ -910,10 +924,17 @@ EOF
     fi
     case "$pct" in
       -|reset|clear|off)
+        # Locked like every other anchor mutation: a concurrent `sl pb <pct>`
+        # would otherwise interleave its read of the anchor with this unlink
+        # and either resurrect what was just cleared or clear what was just
+        # written.
+        _sl_lock || exit 1
         if [[ -s "$SL_PB_ANCHOR" ]]; then
           rm -f "$SL_PB_ANCHOR"
+          _sl_unlock
           echo "anchor cleared."
         else
+          _sl_unlock
           echo "no anchor to clear."
         fi
         exit 0
@@ -932,16 +953,23 @@ EOF
     if [[ ! -s "$SL_STATE" ]]; then
       echo "no state yet — is the dish reachable?" >&2; exit 1
     fi
+    # The anchor pins a bank percentage to the energyWh reading at that instant;
+    # if a concurrent poll advances the total between our read and our write,
+    # the pairing is off by that delta and every later runtime estimate
+    # inherits the error.
+    #
+    # The lock has to open *before* the prior-anchor read, not just before the
+    # write: carrying forward a `wh` we read outside it means a concurrent
+    # `sl pb` can replace the capacity underneath us, and we then publish the
+    # old capacity paired with our new percentage. This whole block is one
+    # read-modify-write over the anchor, same as the state transaction above.
+    # (The dash pass took and released the lock itself — nesting here would
+    # just reopen fd 9.)
+    _sl_lock || exit 1
     # Preserve prior wh if not given this time.
     prev_wh=""
     [[ -s "$SL_PB_ANCHOR" ]] && prev_wh=$(jq -r '.wh // empty' "$SL_PB_ANCHOR" 2>/dev/null || true)
     [[ -z "$wh" ]] && wh="$prev_wh"
-    # The anchor pins a bank percentage to the energyWh reading at that instant;
-    # if a concurrent poll advances the total between our read and our write,
-    # the pairing is off by that delta and every later runtime estimate
-    # inherits the error. Lock across both. (The dash pass above took and
-    # released the lock on its own — nesting it here would just reopen fd 9.)
-    _sl_lock
     if [[ -n "$wh" ]]; then
       anchor=$(jq -c --argjson pct "$pct" --argjson wh "$wh" --argjson ts "$(date +%s)" \
         '{pct:$pct, wh:$wh, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
