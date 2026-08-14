@@ -165,6 +165,30 @@ Everything else the submission needs is in roadmap.md: the scaffolding to cut,
 the Guideline 5.2 trademark exposure, the `PrivacyInfo.xcprivacy` reasons, and
 the non-code work (screenshots, privacy policy URL, export compliance).
 
+## Notarized on 2026-08-14
+
+`DishWatch-0.1.2.dmg`, 11 MB, universal, two tickets:
+
+| Submission | | |
+|---|---|---|
+| `e4b19cdf-d0b9-4cb2-8623-3146c9f52838` | the `.app` | Accepted |
+| the DMG | wrapped around the stapled app | Accepted |
+
+Both accepted first try, no rejections. `verify-release` on a quarantined copy
+extracted from the mounted image:
+
+```
+.build/DishWatch-0.1.2.dmg: accepted     source=Notarized Developer ID
+.build/verify/DishWatch.app: accepted    source=Notarized Developer ID
+  DishWatch:        x86_64 arm64
+  dishwatch-helper: x86_64 arm64
+```
+
+Then the artifact was launched the way a downloader gets it — dittoed off the
+mounted image to /tmp, quarantine attribute set, opened. The helper spawned and
+held an ESTABLISHED connection to 192.168.100.1:9200. Gatekeeper acceptance and
+the app actually working are different claims; both are now measured.
+
 ## Verified on 2026-08-14
 
 A universal, sandboxed, Developer ID, hardened-runtime bundle launches, spawns
@@ -176,13 +200,11 @@ runs to the notary and stops only on the absent credential.
 
 ## Still unverified
 
-**Notarization itself.** No submission has been made — the keychain profile does
-not exist yet. Everything above is the shape of a correct submission, not proof
-Apple accepts it.
-
 **Gatekeeper on a machine that has never seen this app.** `verify-release`
 quarantines its copy, which is closer than assessing the build tree, but this
-Mac still has policy caches and has launched these binaries.
+Mac still has policy caches and has launched these binaries. The stapled ticket
+means it should also pass offline; that has not been tested with the network
+down.
 
 **Local Network TCC under a real identity on a clean account.** Every
 measurement is from this machine. The connecting process is the helper; the
