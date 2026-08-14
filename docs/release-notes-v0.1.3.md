@@ -6,8 +6,13 @@ nothing leaves your network.
 
 ## DishWatch.app
 
-Download `DishWatch-0.1.3.dmg`, drag it to Applications, launch it. It lives in
-the menu bar; there is no Dock icon and no window to manage.
+Download `DishWatch-0.1.3.dmg`, drag it to Applications, launch it — or:
+
+```
+brew install --cask faeton/tap/dishwatch-app
+```
+
+It lives in the menu bar; there is no Dock icon and no window to manage.
 
 - Signal, latency, throughput and power at a glance, updated every second
 - Obstruction and outage history from the dish's own 15-minute rings

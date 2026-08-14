@@ -207,29 +207,47 @@ Everything else the submission needs is in roadmap.md: the scaffolding to cut,
 the Guideline 5.2 trademark exposure, the `PrivacyInfo.xcprivacy` reasons, and
 the non-code work (screenshots, privacy policy URL, export compliance).
 
-## Notarized on 2026-08-14
+## Shipped: v0.1.3, 2026-08-14
 
-`DishWatch-0.1.2.dmg`, 11 MB, universal, two tickets:
+`DishWatch-0.1.3.dmg` — 11 MB, universal, notarized and stapled, published at
+[releases/tag/v0.1.3](https://github.com/faeton/dishwatch/releases/tag/v0.1.3)
+with the CLI tarballs, `checksums.txt`, an updated formula and a new cask.
 
-| Submission | | |
-|---|---|---|
-| `e4b19cdf-d0b9-4cb2-8623-3146c9f52838` | the `.app` | Accepted |
-| the DMG | wrapped around the stapled app | Accepted |
+Four notary submissions across the day, every one Accepted first try: a 0.1.2
+rehearsal (`e4e0b75e`, then `e4b19cdf` once universal), then the real pair for
+0.1.3 — the `.app`, and `444f2b24` for the DMG built around it.
 
-Both accepted first try, no rejections. `verify-release` on a quarantined copy
-extracted from the mounted image:
+The published DMG's SHA-256 matches the file that was notarized, byte for byte:
 
 ```
-.build/DishWatch-0.1.2.dmg: accepted     source=Notarized Developer ID
-.build/verify/DishWatch.app: accepted    source=Notarized Developer ID
+825ccc56dc1137ad401beaf3eb875d438d5a7852557c8c6c138427dd61ba1612
+```
+
+That equality is the whole point of putting the DMG in `checksums.txt` — the
+cask's `sha256` is only meaningful if the notarized artifact and the downloaded
+one are the same object.
+
+`verify-release` on a quarantined copy extracted from the mounted image:
+
+```
+DishWatch-0.1.3.dmg:  accepted   source=Notarized Developer ID
+verify/DishWatch.app: accepted   source=Notarized Developer ID
   DishWatch:        x86_64 arm64
   dishwatch-helper: x86_64 arm64
 ```
 
-Then the artifact was launched the way a downloader gets it — dittoed off the
-mounted image to /tmp, quarantine attribute set, opened. The helper spawned and
-held an ESTABLISHED connection to 192.168.100.1:9200. Gatekeeper acceptance and
-the app actually working are different claims; both are now measured.
+Then the real install path, not a simulation of it: `brew install --cask
+faeton/tap/dishwatch-app` → `/Applications` → `stapler validate` → `spctl
+accepted` → launched → the helper spawned and held an ESTABLISHED connection to
+192.168.100.1:9200. Gatekeeper accepting a bundle and the bundle working are
+different claims; both are measured.
+
+### The version guard paid for itself immediately
+
+`make package-dmg` wrote `DishWatch-0.1.3.dmg` directly beside a leftover
+`DishWatch-0.1.2.dmg`. Under the previous `DishWatch-*.dmg` glob the release
+could have carried the older app, or both. Version-exact globbing caught the
+exact case it was written for, hours after being written.
 
 ## Verified on 2026-08-14
 
@@ -257,3 +275,11 @@ roadmap.md Phase 2 for the full evidence and its limits.
 
 **Intel.** The binaries are universal and `lipo` confirms both slices, but
 nothing here has executed the x86_64 slice.
+
+**The formula on Linux.** Its `on_linux` block has shipped since v0.1.0 and has
+never been installed anywhere. The tap CI added in this release does that for
+the first time; its first run is the first evidence either way.
+
+**The cask on a second machine.** Install, upgrade and `--zap` uninstall were
+exercised here only, on the machine that built it. Upgrade in particular has
+never run — there is no previous cask version to upgrade from.

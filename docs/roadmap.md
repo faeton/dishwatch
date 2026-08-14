@@ -26,6 +26,17 @@
 > now [Phase 3.5](#phase-35--what-has-to-happen-before-anything-else), not
 > Phase 4. Full findings in
 > [optimizations.md](optimizations.md#round-3--2026-08-14).
+>
+> **Shipped 2026-08-14.** All of the above is fixed and **v0.1.3 is public** —
+> a notarized, stapled, universal DMG plus a Homebrew cask, alongside the CLI
+> formula for macOS and Linux. `make app` builds release, so the `#if DEBUG`
+> guards are real. See [release.md](release.md) for the process and
+> <https://dishwatch.github.io> for the landing page.
+>
+> This changes the distribution ordering below. "Mac App Store first, notarized
+> direct build later" is now **direct build shipped, Store still blocked** — on
+> certificates rather than code (Apple Distribution and 3rd Party Mac Developer
+> Installer, neither of which this machine has).
 
 ## Goal
 

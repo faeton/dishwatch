@@ -40,14 +40,31 @@ elsewhere, the Go version is canonical and the bash version will fall behind.
 
 ## Install
 
+**The menu-bar app** — macOS 14+, universal, notarized:
+
 ```sh
-brew tap faeton/tap
-brew install dishwatch
+brew install --cask faeton/tap/dishwatch-app
+```
+
+or download the DMG from [the latest release](https://github.com/faeton/dishwatch/releases/latest).
+
+**The CLI** — macOS and Linux, arm64 and x86_64:
+
+```sh
+brew install faeton/tap/dishwatch
 ```
 
 Installs two binaries: `dishwatch` (canonical) and `sl` (shorthand symlink, all
-docs/examples below use `sl`). Make sure your Mac is on the Starlink network
+docs/examples below use `sl`). Make sure the machine is on the Starlink network
 (`192.168.100.1` must be reachable).
+
+Two tokens, not one, and the distinction matters: a tap may hold a formula and
+a cask under the same name, but Homebrew resolves that by preferring the
+formula and only warning — so a shared token would install the CLI and never
+mention the app. The CLI stays a formula rather than becoming a cask because
+casks quarantine everything they extract, and these binaries are unsigned.
+
+<https://dishwatch.github.io>
 
 ## Usage
 
