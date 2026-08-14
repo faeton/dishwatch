@@ -33,10 +33,15 @@ it is a deliberate change rather than a rename.
 ## The app, direct
 
 ```
-make helper-universal                          # from the repo root
 cd app
 make notarize CODESIGN_ID="Developer ID Application: … (BKY9R5336T)" UNIVERSAL=1
 ```
+
+That builds the matching universal engine itself. It used to want a separate
+`make helper-universal` from the repo root first, and the very first real run
+failed on exactly that — the thin-helper guard fired because the previous
+command in the session had rebuilt a host-only helper. A guard should catch
+mistakes, not the normal path.
 
 The notarytool credential already exists on this machine as the keychain profile
 `porter-notarization`, which is the Makefile default. A "profile" here is only a

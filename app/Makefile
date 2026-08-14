@@ -107,6 +107,8 @@ endif
 # damaged", which reads like a signing fault. Dev builds stay host-only; only
 # the release path pays the double build.
 UNIVERSAL   ?= 0
+# Which root-Makefile target builds an engine matching this bundle's shape.
+HELPER_TARGET := $(if $(filter 1,$(UNIVERSAL)),helper-universal,helper)
 ifeq ($(UNIVERSAL),1)
 SWIFT_ARCH    := --arch arm64 --arch x86_64
 # Capitalised, and a different tree entirely, when SwiftPM is given --arch.
@@ -279,6 +281,11 @@ notarize-app:
 	  echo "  ERROR: notarization requires UNIVERSAL=1 (an arm64-only build hard-fails on Intel)" >&2; exit 1; }
 	@test "$(SANDBOX)" = "1" || { \
 	  echo "  ERROR: SANDBOX=0 is a control build and must not ship" >&2; exit 1; }
+	# Build the matching engine rather than asking the operator to remember a
+	# second command in another directory. The thin-helper guard in `app` is
+	# still worth having, but it should be catching a genuine mistake, not the
+	# normal case — and it caught the normal case on the first real run.
+	$(MAKE) -C .. $(HELPER_TARGET)
 	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	@rm -f "$(ZIP)"
@@ -309,6 +316,7 @@ package-dmg:
 # packaging into an upload requiring credentials — a target named `dmg` should
 # not submit anything to Apple.
 dmg:
+	$(MAKE) -C .. $(HELPER_TARGET)
 	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	$(MAKE) package-dmg CODESIGN_ID="$(CODESIGN_ID)"
