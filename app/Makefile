@@ -69,11 +69,21 @@ else
 TIMESTAMP := --timestamp
 endif
 
-# Where notarytool finds its App Store Connect credentials. Create once with:
-#   xcrun notarytool store-credentials dishwatch \
-#     --apple-id <you@example.com> --team-id $(TEAM_ID) --password <app-specific>
-NOTARY_PROFILE ?= dishwatch
-TEAM_ID        ?= BKY9R5336T
+# Where notarytool finds its App Store Connect credentials.
+#
+# The name is a local keychain nickname, not anything Apple issues, and the
+# credential is per-account rather than per-project — so this points at the
+# profile another project on this machine already created and validated, rather
+# than a second one holding the same Apple ID and app-specific password. Create
+# an equivalent on a fresh machine with:
+#   xcrun notarytool store-credentials <any-name> \
+#     --apple-id <you@example.com> --team-id $(EXPECTED_TEAM_ID) --password <app-specific>
+NOTARY_PROFILE ?= porter-notarization
+# `override` on purpose: this is what we assert the signature says, so it must
+# not be settable from the command line. A user-overridable expectation is not
+# an assertion — TEAM_ID=WHATEVER would have made the check agree with whatever
+# it was handed.
+override EXPECTED_TEAM_ID := BKY9R5336T
 DMG            := .build/$(APP)-$(SHORT_VER).dmg
 ZIP            := .build/$(APP)-$(SHORT_VER).zip
 
@@ -107,7 +117,7 @@ SWIFT_PRODUCT := $(BUILD_DIR)/$(APP)
 endif
 
 .PHONY: app run icon clean-app test dmg notarize notarize-app verify-release \
-        check-identity universal-helper
+        check-identity
 
 # Always reassembles rather than treating $(APP_DIR) as a file target. A
 # directory target compares mtimes against sources, which is wrong here in a way
@@ -145,6 +155,11 @@ app:
 	    *arm64*x86_64*|*x86_64*arm64*) ;; \
 	    *) echo "  ERROR: UNIVERSAL=1 but the helper is '$$archs' — run: (cd .. && make helper-universal)" >&2; exit 1;; \
 	  esac; \
+	  archs="$$(lipo -archs "$(CONTENTS)/MacOS/$(APP)")"; \
+	  case "$$archs" in \
+	    *arm64*x86_64*|*x86_64*arm64*) ;; \
+	    *) echo "  ERROR: UNIVERSAL=1 but the app binary is '$$archs' — SwiftPM wrote a thin product" >&2; exit 1;; \
+	  esac; \
 	fi
 	cp Resources/AppIcon.icns "$(CONTENTS)/Resources/AppIcon.icns"
 	cp Resources/PrivacyInfo.xcprivacy "$(CONTENTS)/Resources/PrivacyInfo.xcprivacy"
@@ -156,9 +171,11 @@ app:
 	# --force because the SwiftPM binary may already carry an ad-hoc signature
 	# from the linker; without it codesign refuses rather than replacing.
 	# Nested code first, inside-out, or the outer seal covers a stale hash.
-	# The helper gets `inherit` rather than the app's own entitlements: Apple's
-	# embedded-tool rule is that a child inherits the parent's sandbox, and
-	# handing it an independent profile is what breaks that.
+	# When the app is sandboxed the helper gets `inherit` rather than the app's
+	# own entitlements: Apple's embedded-tool rule is that a child inherits the
+	# parent's sandbox, and handing it an independent profile breaks that. When
+	# the app is NOT sandboxed it gets no entitlements at all — see
+	# HELPER_ENTITLEMENTS above for why `inherit` is fatal there.
 	codesign --force --sign "$(CODESIGN_ID)" \
 	         $(HELPER_ENTITLEMENTS) \
 	         --options runtime $(TIMESTAMP) \
@@ -225,19 +242,23 @@ check-identity:
 	@case "$(CODESIGN_ID)" in -|"") \
 	  echo "  refusing to package an ad-hoc build — pass CODESIGN_ID=\"Developer ID Application: ...\"" >&2; \
 	  exit 1;; esac
-	@codesign -dvv "$(APP_DIR)" 2>&1 | grep -q "^Authority=Developer ID Application:" \
-	  || { echo "  ERROR: not signed by a Developer ID Application cert — the notary will reject it" >&2; exit 1; }
-	@codesign -dvv "$(APP_DIR)" 2>&1 | grep -q "^TeamIdentifier=$(TEAM_ID)$$" \
-	  || { echo "  ERROR: team is not $(TEAM_ID)" >&2; exit 1; }
-	# Both binaries, not just the outer one. The notary inspects nested code and
-	# rejects the submission for the helper just as readily.
+	# Every assertion applies to BOTH code objects. Checking authority and team
+	# only on the outer bundle left the nested helper — which the notary inspects
+	# just as closely — asserted on nothing but its timestamp.
 	@for b in "$(APP_DIR)" "$(CONTENTS)/MacOS/dishwatch-helper"; do \
-	  codesign -dvv "$$b" 2>&1 | grep -q "^Timestamp=" \
+	  codesign --verify --strict "$$b" \
+	    || { echo "  ERROR: $$b has an invalid signature" >&2; exit 1; }; \
+	  meta="$$(codesign -dvv "$$b" 2>&1)"; \
+	  printf '%s\n' "$$meta" | grep -q "^Authority=Developer ID Application:" \
+	    || { echo "  ERROR: $$b is not signed by a Developer ID Application cert — the notary will reject it" >&2; exit 1; }; \
+	  printf '%s\n' "$$meta" | grep -q "^TeamIdentifier=$(EXPECTED_TEAM_ID)$$" \
+	    || { echo "  ERROR: $$b is not team $(EXPECTED_TEAM_ID)" >&2; exit 1; }; \
+	  printf '%s\n' "$$meta" | grep -q "^Timestamp=" \
 	    || { echo "  ERROR: $$b carries no secure timestamp — the notary would reject this" >&2; exit 1; }; \
-	  codesign -dvv "$$b" 2>&1 | grep -q "flags=.*runtime" \
+	  printf '%s\n' "$$meta" | grep -qE "^CodeDirectory .*flags=.*runtime" \
 	    || { echo "  ERROR: $$b is not hardened-runtime" >&2; exit 1; }; \
 	done
-	@echo "  identity ok — Developer ID, team $(TEAM_ID), timestamped, hardened, universal=$(UNIVERSAL)"
+	@echo "  identity ok — Developer ID, team $(EXPECTED_TEAM_ID), timestamped, hardened, universal=$(UNIVERSAL)"
 
 # Stage one: notarize and staple the .app itself.
 #
@@ -249,8 +270,17 @@ check-identity:
 # is a likely path, not an edge case. So the app gets its own ticket, and the
 # DMG is built afterwards around the already-stapled app.
 notarize-app:
+	# The release shape is not a suggestion. UNIVERSAL defaults to 0 so dev
+	# builds stay fast, which means forgetting the flag on the release command
+	# silently uploads and ships an arm64-only artifact — the exact defect the
+	# universal work existed to fix, reachable by omission. Likewise SANDBOX=0
+	# is a diagnostic control and must never leave this machine.
+	@test "$(UNIVERSAL)" = "1" || { \
+	  echo "  ERROR: notarization requires UNIVERSAL=1 (an arm64-only build hard-fails on Intel)" >&2; exit 1; }
+	@test "$(SANDBOX)" = "1" || { \
+	  echo "  ERROR: SANDBOX=0 is a control build and must not ship" >&2; exit 1; }
 	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
-	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)"
+	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	@rm -f "$(ZIP)"
 	# ditto, not zip: it preserves the bundle's symlinks and extended
 	# attributes, and the signature does not survive a naive zip.
@@ -258,9 +288,13 @@ notarize-app:
 	xcrun notarytool submit "$(ZIP)" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple "$(APP_DIR)"
 	@rm -f "$(ZIP)"
+	# Stapling rewrites the bundle. Confirm it did not invalidate the seal here,
+	# rather than discovering it after the DMG has been built around it.
+	codesign --verify --deep --strict "$(APP_DIR)"
 
-# Stage two: wrap the stapled app, sign the image, notarize and staple that too.
-dmg: notarize-app
+# Wraps whatever is currently in $(APP_DIR). Deliberately makes no claim about
+# what that is — the callers below establish it.
+package-dmg:
 	@rm -f "$(DMG)"
 	hdiutil create -volname "$(APP)" -srcfolder "$(APP_DIR)" \
 	  -ov -format UDZO -quiet "$(DMG)"
@@ -270,7 +304,19 @@ dmg: notarize-app
 	codesign --force --sign "$(CODESIGN_ID)" --timestamp "$(DMG)"
 	@echo "  $(DMG)"
 
-notarize: dmg
+# Offline packaging: build, verify the identity, wrap. No network, no notary,
+# no ticket. `dmg` briefly depended on notarize-app, which quietly turned local
+# packaging into an upload requiring credentials — a target named `dmg` should
+# not submit anything to Apple.
+dmg:
+	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
+	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
+	$(MAKE) package-dmg CODESIGN_ID="$(CODESIGN_ID)"
+	@echo "  NOT notarized — Gatekeeper will reject this on another Mac."
+
+# Stage two: wrap the already-stapled app, then notarize and staple the image.
+notarize: notarize-app
+	$(MAKE) package-dmg CODESIGN_ID="$(CODESIGN_ID)"
 	xcrun notarytool submit "$(DMG)" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple "$(DMG)"
 	$(MAKE) verify-release
@@ -294,16 +340,24 @@ verify-release:
 	spctl --assess --type open --context context:primary-signature --verbose=2 "$(DMG)"
 	@echo "  --- Gatekeeper on the app as a user receives it ---"
 	@set -e; \
-	 mp="$$(hdiutil attach -nobrowse -readonly "$(DMG)" | tail -1 | cut -f3-)"; \
-	 trap 'hdiutil detach "$$mp" -quiet 2>/dev/null || true' EXIT; \
+	 mkdir -p .build; \
+	 mp="$$(mktemp -d .build/verify-mount.XXXXXX)"; mounted=0; \
+	 trap 'if [ "$$mounted" = 1 ]; then hdiutil detach "$$mp" -quiet 2>/dev/null || true; fi; rmdir "$$mp" 2>/dev/null || true' EXIT; \
+	 hdiutil attach -nobrowse -readonly -mountpoint "$$mp" "$(DMG)" >/dev/null; \
+	 mounted=1; \
 	 rm -rf .build/verify && mkdir -p .build/verify; \
 	 /usr/bin/ditto "$$mp/$(APP).app" ".build/verify/$(APP).app"; \
 	 xattr -w com.apple.quarantine "0083;00000000;Safari;" ".build/verify/$(APP).app"; \
 	 xcrun stapler validate ".build/verify/$(APP).app"; \
 	 spctl --assess --type execute --verbose=2 ".build/verify/$(APP).app"; \
 	 codesign --verify --deep --strict --verbose=2 ".build/verify/$(APP).app"; \
-	 echo "  architectures: $$(lipo -archs ".build/verify/$(APP).app/Contents/MacOS/$(APP)")"; \
-	 echo "  helper:        $$(lipo -archs ".build/verify/$(APP).app/Contents/MacOS/dishwatch-helper")"; \
+	 for b in "$(APP)" dishwatch-helper; do \
+	   archs="$$(lipo -archs ".build/verify/$(APP).app/Contents/MacOS/$$b")"; \
+	   case "$$archs" in \
+	     *arm64*x86_64*|*x86_64*arm64*) echo "  $$b: $$archs" ;; \
+	     *) echo "  ERROR: $$b is not universal: $$archs" >&2; exit 1 ;; \
+	   esac; \
+	 done; \
 	 rm -rf .build/verify
 
 clean-app:

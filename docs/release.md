@@ -33,12 +33,21 @@ it is a deliberate change rather than a rename.
 ## The app, direct
 
 ```
-xcrun notarytool store-credentials dishwatch \
-  --apple-id you@example.com --team-id BKY9R5336T --password <app-specific>
-
 make helper-universal                          # from the repo root
 cd app
 make notarize CODESIGN_ID="Developer ID Application: … (BKY9R5336T)" UNIVERSAL=1
+```
+
+The notarytool credential already exists on this machine as the keychain profile
+`porter-notarization`, which is the Makefile default. A "profile" here is only a
+local nickname for an Apple ID + team ID + app-specific password held in the
+login keychain — nothing Apple issues, and **not** a provisioning profile. It is
+per-account, not per-project, so the one another project created works here
+unchanged. On a fresh machine:
+
+```
+xcrun notarytool store-credentials <any-name> \
+  --apple-id you@example.com --team-id BKY9R5336T --password <app-specific>
 ```
 
 **One command, and it must carry the identity.** A two-step

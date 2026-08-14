@@ -26,6 +26,7 @@ helper:
 	# `make helper` after `make helper-universal` dies on "already exists and is
 	# not an object file", which says nothing about the actual cause.
 	@rm -f $(HELPER)
+	@mkdir -p $(dir $(HELPER))   # go build -o will not create the parent, and bin/ is gitignored
 	CGO_ENABLED=0 go build -trimpath -tags apphelper -ldflags "$(LDFLAGS) $(SHRINK)" -o $(HELPER) $(PKG)
 	@$(MAKE) --no-print-directory helper-check
 
@@ -35,6 +36,7 @@ helper:
 # clean failure, because it looks like a dish problem.
 helper-universal:
 	@rm -f $(HELPER) $(HELPER).arm64 $(HELPER).amd64   # same fat-Mach-O trap
+	@mkdir -p $(dir $(HELPER))
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -tags apphelper -ldflags "$(LDFLAGS) $(SHRINK)" -o $(HELPER).arm64 $(PKG)
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -tags apphelper -ldflags "$(LDFLAGS) $(SHRINK)" -o $(HELPER).amd64 $(PKG)
 	lipo -create -output $(HELPER) $(HELPER).arm64 $(HELPER).amd64

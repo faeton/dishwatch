@@ -81,9 +81,17 @@ jobs:
       # An arm64-only release artifact does not degrade on an Intel Mac, it
       # hard-fails — and it fails as "the application is damaged", which reads
       # as a signing fault and sends you debugging the wrong thing.
+      # This job builds the Go helper too, and the runner image's Go is neither
+      # guaranteed on PATH nor guaranteed to satisfy go.mod. `brew list go ||
+      # true` installed nothing and failed at nothing, which is the worst of
+      # both — pin it the same way the ubuntu job does.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: release binaries are universal
         run: |
-          brew list go >/dev/null 2>&1 || true
           make helper-universal
           for b in bin/dishwatch-helper; do
             archs="$(lipo -archs "$b")"

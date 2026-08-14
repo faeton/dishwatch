@@ -46,13 +46,19 @@ the bundle carries the embedded helper.
 ### How live data works
 
 `HelperProvider` starts one `dishwatch helper` child and keeps it, sending
-newline-delimited JSON over pipes. `make app` copies `../bin/dishwatch` into
-`Contents/MacOS/dishwatch-helper` and signs it with
-`Resources/helper.entitlements` — `app-sandbox` plus **`inherit`**, which is
-Apple's supported pattern for an embedded command-line tool: the child inherits
-the containing app's sandbox rather than carrying its own profile. That is why
-the *app* needs `network.client` even though the app process never opens the
-dish socket itself.
+newline-delimited JSON over pipes. `make app` copies `../bin/dishwatch-helper`
+— the restricted `-tags apphelper` build, not the full CLI — into
+`Contents/MacOS/dishwatch-helper`.
+
+In a sandboxed build it is signed with `Resources/helper.entitlements`:
+`app-sandbox` plus **`inherit`**, Apple's supported pattern for an embedded
+command-line tool, where the child inherits the containing app's sandbox rather
+than carrying its own profile. That is why the *app* needs `network.client` even
+though the app process never opens the dish socket itself.
+
+Under `make app SANDBOX=0` it gets **no entitlements at all**. `inherit` with an
+unsandboxed parent has nothing to inherit, and libsecinit aborts the child in
+its initializer before `main()`.
 
 One consequence that will confuse you once: **the bundled helper cannot be run
 from a terminal.** A binary carrying `inherit` must be spawned by a sandboxed
