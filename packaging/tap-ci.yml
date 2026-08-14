@@ -53,10 +53,15 @@ jobs:
       - name: audit casks
         run: |
           shopt -s nullglob
+          n=0
           for f in Casks/*.rb; do
             token="$(basename "$f" .rb)"
+            n=$((n + 1))
+            echo "== auditing $token"
             brew audit --cask --online --strict "faeton/tap/$token"
           done
+          echo "audited $n cask(s)"
+          test "$n" -gt 0 || { echo "ERROR: no casks matched Casks/*.rb" >&2; exit 1; }
 
       # Advisory, and deliberately not fatal: the goreleaser-generated formula
       # carries `version` alongside per-arch URLs, which --strict calls
@@ -67,11 +72,21 @@ jobs:
       - name: lint formulae (advisory)
         run: |
           shopt -s nullglob
+          # Say what is being audited. A clean `brew audit` prints nothing at
+          # all, which makes a passing step and a step whose glob matched
+          # nothing look identical in the log — the same "silence reads as
+          # success" trap as the `|| true` this replaced.
+          n=0
           for f in Formula/*.rb; do
             name="$(basename "$f" .rb)"
+            n=$((n + 1))
+            echo "== auditing $name"
             brew audit --formula --online --strict "faeton/tap/$name" \
+              && echo "   clean" \
               || echo "::warning title=formula lint::brew audit --strict flagged $name (see log)"
           done
+          echo "audited $n formula(e)"
+          test "$n" -gt 0 || { echo "ERROR: no formulae matched Formula/*.rb" >&2; exit 1; }
 
       # The one thing a swallowed audit was hiding that can break every user at
       # once: a URL that 404s after a retagged release, or a sha256 that no
@@ -86,6 +101,7 @@ jobs:
           set -o pipefail
           shopt -s nullglob
           rc=0
+          checked=0
           for f in Formula/*.rb Casks/*.rb; do
             echo "== ${f}"
             ver="$(awk '/^[[:space:]]*version[[:space:]]+"/ {match($0,/"[^"]+"/); print substr($0,RSTART+1,RLENGTH-2); exit}' "$f")"
@@ -104,6 +120,7 @@ jobs:
               fi
               if [ "$got" = "$want" ]; then
                 echo "  ok   ${url##*/}"
+                checked=$((checked + 1))
               else
                 echo "  FAIL ${url##*/}" >&2
                 echo "       recorded  $want" >&2
@@ -112,6 +129,8 @@ jobs:
               fi
             done <<< "$pairs"
           done
+          echo "verified $checked published asset(s)"
+          test "$checked" -gt 0 || { echo "ERROR: verified nothing — no formula or cask was read" >&2; exit 1; }
           exit $rc
 
   install:

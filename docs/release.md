@@ -312,9 +312,12 @@ URLs, which `--strict` calls redundant — but discarding the whole audit to
 silence one false positive also discarded a 404 URL and a stale sha256. Split in
 two: the lint stays advisory and now surfaces as a GitHub warning annotation
 instead of vanishing, and a new fatal step checks every `url`/`sha256` pair in
-every formula and cask against what is actually published. All eight assets in
-the tap verify today; tampering with a hash and pointing a URL at a missing file
-both fail it.
+every formula and cask against what is actually published. All seven assets in
+the tap verify today — the four DishWatch tarballs, the DMG, and the two from
+the tap's other projects; tampering with a hash and pointing a URL at a missing
+file both fail it. Each of these loops also counts what it processed and fails
+on zero, because a clean `brew audit` prints nothing at all and an empty glob
+would otherwise be indistinguishable from a pass.
 
 The universality check `echo`ed `lipo -archs` and moved on. A DMG containing
 only the runner's own slice passes install, `stapler` and `spctl` identically to
