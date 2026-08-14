@@ -16,9 +16,13 @@ The repo contains the tool twice:
   zero runtime deps, ~12 MB (~5 MB gzipped), what ships via `brew install
   dishwatch`. This is what you should use.
 - **Bash** (`sl`) — the original 881-line script that needs `grpcurl` + `jq` at
-  runtime. Kept in the repo as a reference implementation and a portable
-  fallback for anywhere Homebrew isn't available (a random Linux box, a
-  recovery shell, etc.). Still works; not installed by the brew formula.
+  runtime. Kept in the repo as a reference implementation and a fallback for
+  anywhere Homebrew isn't available (a random Linux box, a recovery shell).
+  Still works; not installed by the brew formula. It takes the state lock via
+  `lockf(1)` on macOS and `flock(1)` on Linux, and parses timestamps with
+  whichever of BSD or GNU `date` it finds — but the Go build is the one that is
+  actually tested on both platforms, so treat the script as a fallback rather
+  than an equivalent.
 
 Both read and write the **same on-disk state** in `~/.cache/sl/`
 (`state.json`, `pb.json`, `events.log`, `geo_*.txt`) with identical schemas, so

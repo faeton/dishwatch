@@ -119,7 +119,7 @@ SWIFT_PRODUCT := $(BUILD_DIR)/$(APP)
 endif
 
 .PHONY: app run icon clean-app test dmg notarize notarize-app verify-release \
-        check-identity
+        check-identity check-version
 
 # Always reassembles rather than treating $(APP_DIR) as a file target. A
 # directory target compares mtimes against sources, which is wrong here in a way
@@ -240,6 +240,28 @@ test:
 # signs and timestamps happily, then fails at the notary after the upload.
 # Checked against the signed output rather than the string, so it also catches
 # a codesign that quietly picked a different matching identity.
+# The tag, the DMG filename and the bundle's own version are three independent
+# derivations of "which release is this", and nothing compared them. SHORT_VER
+# strips everything after the first dash of `git describe`, so building off an
+# untagged commit yields a DMG named for the PREVIOUS tag — and it notarizes,
+# uploads and installs perfectly while claiming to be a version it is not.
+check-version:
+	@desc="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
+	 if [ -z "$$desc" ]; then \
+	   echo "  ERROR: HEAD is not exactly on a tag — the release version would be guessed from $$(git describe --tags --always)" >&2; \
+	   echo "         tag first, then build: the DMG name and Info.plist both come from git describe" >&2; \
+	   exit 1; \
+	 fi; \
+	 want="$${desc#v}"; \
+	 if [ "$$want" != "$(SHORT_VER)" ]; then \
+	   echo "  ERROR: tag $$desc gives $$want but SHORT_VER is $(SHORT_VER)" >&2; exit 1; \
+	 fi; \
+	 got="$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(CONTENTS)/Info.plist" 2>/dev/null)"; \
+	 if [ "$$got" != "$$want" ]; then \
+	   echo "  ERROR: bundle says $$got, tag says $$want" >&2; exit 1; \
+	 fi; \
+	 echo "  version ok — tag $$desc, bundle $$got, DMG $(APP)-$(SHORT_VER).dmg"
+
 check-identity:
 	@case "$(CODESIGN_ID)" in -|"") \
 	  echo "  refusing to package an ad-hoc build — pass CODESIGN_ID=\"Developer ID Application: ...\"" >&2; \
@@ -288,6 +310,7 @@ notarize-app:
 	$(MAKE) -C .. $(HELPER_TARGET)
 	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
 	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
+	$(MAKE) check-version
 	@rm -f "$(ZIP)"
 	# ditto, not zip: it preserves the bundle's symlinks and extended
 	# attributes, and the signature does not survive a naive zip.

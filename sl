@@ -53,8 +53,17 @@ call() { grpcurl -plaintext -max-time 4 -d "$1" "$DISH" "$SVC"; }
 # lets the lock outlive the helper and span a shell critical section. The lock
 # belongs to the open file description, so fd 9 staying open in this shell keeps
 # it held after lockf exits.
+#
+# Linux has no lockf(1) but does have flock(1), which locks an inherited
+# descriptor with flock(2) — the same lock, the same semantics. Without this
+# branch every Linux run silently took no lock at all, which is exactly where
+# the README promised a "portable fallback".
 _sl_lock() {
-  command -v lockf >/dev/null 2>&1 || return 0   # no lockf: unlocked, as before
+  local locker
+  if command -v lockf >/dev/null 2>&1; then locker=lockf        # macOS/BSD
+  elif command -v flock >/dev/null 2>&1; then locker=flock      # Linux
+  else return 0                                                 # neither: unlocked, as before
+  fi
   exec 9>>"$SL_LOCK" || return 0
   # Bounded wait so a wedged holder cannot hang the CLI forever — but on
   # timeout we *fail*, we do not proceed unlocked.
@@ -67,7 +76,7 @@ _sl_lock() {
   # directory, not a busy peer. Ten seconds is already far longer than any
   # honest holder needs, since the critical section is pure arithmetic with the
   # RPCs outside it.
-  if ! lockf -s -t 10 9; then
+  if ! { [[ $locker == lockf ]] && lockf -s -t 10 9 || [[ $locker == flock ]] && flock -w 10 9; }; then
     exec 9>&-
     printf '\e[38;5;174msl: state lock held for over 10s\e[0m — another sl/dishwatch may be wedged\n' >&2
     printf '  refusing to write state rather than racing it; retry, or check for a stuck process\n' >&2
@@ -184,13 +193,25 @@ _sl_diff_and_log() {
   _sl_write_atomic "$SL_STATE" "$cur"
 }
 
+# "YYYY-MM-DD HH:MM:SS" → epoch seconds, 0 if unparseable.
+#
+# BSD and GNU date take incompatible flags for this and neither accepts the
+# other's. The call site used `date -j -f` with a `|| echo 0` fallback, so on
+# Linux it always yielded 0 — silently defeating the rate-limit it exists for
+# and logging an UNREACH line on every poll instead of one a minute.
+_sl_epoch() {
+  date -j -f '%Y-%m-%d %H:%M:%S' "$1" +%s 2>/dev/null \
+    || date -d "$1" +%s 2>/dev/null \
+    || echo 0
+}
+
 _sl_mark_unreachable() {
   # Rate-limit: one UNREACH line per minute
   local last_ur last_ts now
   now=$(date +%s)
   last_ur=$(grep -E '  UNREACH    ' "$SL_EVENTS" 2>/dev/null | tail -1 || true)
   if [[ -n "$last_ur" ]]; then
-    last_ts=$(date -j -f '%Y-%m-%d %H:%M:%S' "$(echo "$last_ur"|awk '{print $1" "$2}')" +%s 2>/dev/null || echo 0)
+    last_ts=$(_sl_epoch "$(echo "$last_ur"|awk '{print $1" "$2}')")
     (( now - last_ts < 60 )) && return 0
   fi
   _sl_log "UNREACH" "dish/api not answering ($DISH)"

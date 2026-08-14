@@ -38,13 +38,39 @@ goreleaser refuses otherwise.
 goreleaser builds four platforms, writes checksums, and pushes the Homebrew tap
 formula.
 
-Two things to know. The macOS binaries are **not signed or notarized**. Homebrew
-installs are unaffected, because Homebrew's own download does not set the
-`com.apple.quarantine` attribute; a user who downloads the tarball from the
-Releases page in a browser does get it, and Gatekeeper will refuse the binary.
-And `brews:` is deprecated in goreleaser (→ `homebrew_casks`). It still works,
-but the migration changes the install stanza and how quarantine is handled, so
-it is a deliberate change rather than a rename.
+The macOS binaries are **not signed or notarized**. Homebrew installs are
+unaffected — a formula's download does not set `com.apple.quarantine` — but a
+user who downloads the tarball from the Releases page in a browser does get it,
+and Gatekeeper will refuse the binary.
+
+That unsigned-ness is also why the CLI stays a **formula** rather than moving to
+`homebrew_casks`, which goreleaser now prefers. Casks quarantine everything they
+extract (`Cask::Quarantine.cask!`, applied recursively), so a cask-packaged
+unsigned CLI is precisely what Gatekeeper blocks. Note the reason: **not**
+because casks are macOS-only — they have not been since Homebrew 4.5, and only
+the `app` artifact is macOS-bound.
+
+So `brews:` stays deprecated-but-used, and `goreleaser check` exits non-zero
+because of it. The exit condition is signing and notarizing the CLI itself
+(`notarize.macos`, which needs a `.p12` export and an App Store Connect API key
+rather than the notarytool keychain profile). That should happen before
+goreleaser v3 removes the key, not merely "eventually".
+
+## The app cask
+
+`packaging/dishwatch-app.rb` is copied into the tap at release time with the
+version and the SHA of the uploaded DMG (now in `checksums.txt`). This is a
+manual release step — goreleaser only maintains taps for artifacts it built.
+
+The token is `dishwatch-app`, not `dishwatch`. A tap may hold a formula and a
+cask under the same token, but Homebrew resolves the collision by preferring the
+formula and printing only a warning, so `brew install faeton/tap/dishwatch`
+would install the CLI and never reveal that an app exists.
+
+```
+brew install faeton/tap/dishwatch             # CLI  — macOS + Linux
+brew install --cask faeton/tap/dishwatch-app  # app  — macOS
+```
 
 ## The app, direct
 
