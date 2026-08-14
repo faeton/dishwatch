@@ -76,7 +76,18 @@ _sl_lock() {
   # directory, not a busy peer. Ten seconds is already far longer than any
   # honest holder needs, since the critical section is pure arithmetic with the
   # RPCs outside it.
-  if ! { [[ $locker == lockf ]] && lockf -s -t 10 9 || [[ $locker == flock ]] && flock -w 10 9; }; then
+  #
+  # A `case` and not a chain of && / ||. Those have equal precedence and group
+  # left to right, so `A && lockf || B && flock` parses as `((A && lockf) || B)
+  # && flock` — on macOS lockf would succeed and flock would *then* run anyway,
+  # fail with "command not found", and take the whole condition down with it.
+  # That is not hypothetical: it made `sl dash` exit 1 on every macOS run.
+  local locked=0
+  case $locker in
+    lockf) lockf -s -t 10 9 && locked=1 ;;
+    flock) flock -w 10 9   && locked=1 ;;
+  esac
+  if (( ! locked )); then
     exec 9>&-
     printf '\e[38;5;174msl: state lock held for over 10s\e[0m — another sl/dishwatch may be wedged\n' >&2
     printf '  refusing to write state rather than racing it; retry, or check for a stuck process\n' >&2

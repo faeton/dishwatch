@@ -853,6 +853,38 @@ Measured cost of one dashboard snapshot:
   BSD/GNU/Windows, and neither runs sandboxed. Abstract behind an
   `internal/speed` interface; do LAN RTT in Go, or drop it from the app path.
 
+### The bash state lock broke once in each direction (2026-08-14)
+
+Worth keeping because the shape of the mistake is more instructive than either
+bug.
+
+The lock started as `command -v lockf || return 0` — lockf(1) is BSD, so on
+Linux the guard returned early and **every run took no lock at all**, in the one
+file the README calls the portable fallback.
+
+The fix added a flock(1) branch for Linux and dispatched like this:
+
+```bash
+if ! { [[ $locker == lockf ]] && lockf -s -t 10 9 || [[ $locker == flock ]] && flock -w 10 9; }; then
+```
+
+`&&` and `||` have equal precedence in bash and group left to right, so that is
+`((A && lockf) || B) && flock`, not the intended pair of alternatives. On macOS
+`lockf` succeeded, the `||` short-circuited past B, and **`flock` then ran
+anyway** — absent on stock macOS, exit 127, condition false. `sl dash` exited 1
+with "state lock held for over 10s" on every macOS run, contended or not. A
+Homebrew `flock` on PATH would have masked it, since flock(2) and POSIX locks
+are different lock spaces and the second acquire succeeds.
+
+Now a `case`. But the durable lesson is that neither break was catchable by
+anything this project ran: `go test` never loads the bash script, and each break
+was invisible from the platform its author happened to be on — the Linux bug
+from macOS, the macOS bug from Linux. `scripts/check-sl-lock.sh` runs on both in
+CI, and asserts the half a "degrade quietly" bug destroys: that the lock is
+**refused** when genuinely held. Checked against all three historical versions —
+it fails the original on Linux, fails the second on macOS, passes the current on
+both.
+
 ## Build notes (verified 2026-08-04)
 
 - `-buildmode=c-archive` builds cleanly with the full gRPC + reflection

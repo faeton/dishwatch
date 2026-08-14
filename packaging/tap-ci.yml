@@ -58,13 +58,61 @@ jobs:
             brew audit --cask --online --strict "faeton/tap/$token"
           done
 
-      - name: audit formulae
+      # Advisory, and deliberately not fatal: the goreleaser-generated formula
+      # carries `version` alongside per-arch URLs, which --strict calls
+      # redundant. That is a false positive we cannot fix without hand-editing
+      # generated output — but it is NOT a reason to discard the whole audit,
+      # which is what `|| true` used to do. The check that actually matters is
+      # split out into its own fatal step below.
+      - name: lint formulae (advisory)
         run: |
           shopt -s nullglob
           for f in Formula/*.rb; do
             name="$(basename "$f" .rb)"
-            brew audit --formula --online --strict "faeton/tap/$name" || true
+            brew audit --formula --online --strict "faeton/tap/$name" \
+              || echo "::warning title=formula lint::brew audit --strict flagged $name (see log)"
           done
+
+      # The one thing a swallowed audit was hiding that can break every user at
+      # once: a URL that 404s after a retagged release, or a sha256 that no
+      # longer matches the published asset. Checked for EVERY url/sha256 pair,
+      # not just the runner's own architecture — no install exercises the other
+      # three, so nothing else here would ever notice.
+      - name: published assets match their recorded hashes
+        run: |
+          # pipefail matters here: without it `curl | shasum | awk` reports
+          # awk's status, so a 404 surfaces as "hash mismatch" against the
+          # sha256 of an empty string rather than as a download failure.
+          set -o pipefail
+          shopt -s nullglob
+          rc=0
+          for f in Formula/*.rb Casks/*.rb; do
+            echo "== ${f}"
+            ver="$(awk '/^[[:space:]]*version[[:space:]]+"/ {match($0,/"[^"]+"/); print substr($0,RSTART+1,RLENGTH-2); exit}' "$f")"
+            pairs="$(awk '
+              /^[[:space:]]*url[[:space:]]+"/    { match($0,/"[^"]+"/); u=substr($0,RSTART+1,RLENGTH-2); if (s!="") { print u" "s; s=""; u="" } }
+              /^[[:space:]]*sha256[[:space:]]+"/ { match($0,/"[^"]+"/); s=substr($0,RSTART+1,RLENGTH-2); if (u!="") { print u" "s; u=""; s="" } }
+            ' "$f")"
+            if [ -z "$pairs" ]; then
+              echo "  ERROR: parsed no url/sha256 pairs — the parser or the file shape changed" >&2
+              rc=1; continue
+            fi
+            while read -r url want; do
+              url="${url//\#\{version\}/$ver}"
+              if ! got="$(curl -fsSL --retry 2 --max-time 300 "$url" | shasum -a 256 | awk '{print $1}')"; then
+                echo "  FAIL ${url##*/} — did not download" >&2; rc=1; continue
+              fi
+              if [ "$got" = "$want" ]; then
+                echo "  ok   ${url##*/}"
+              else
+                echo "  FAIL ${url##*/}" >&2
+                echo "       recorded  $want" >&2
+                echo "       published $got" >&2
+                rc=1
+              fi
+            done <<< "$pairs"
+          done
+          exit $rc
 
   install:
     runs-on: macos-15
@@ -89,9 +137,30 @@ jobs:
           test -d "$app" || { echo "cask installed no app at $app" >&2; exit 1; }
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
-          echo "  archs: $(lipo -archs "$app/Contents/MacOS/DishWatch")"
-          echo "  helper: $(lipo -archs "$app/Contents/MacOS/dishwatch-helper")"
+          # Assert, do not print. A notarized DMG containing only the runner's
+          # own slice passes install, stapler and spctl exactly like a universal
+          # one — `echo` then reported the single architecture and returned 0,
+          # so CI went green on a build that cannot start on half the Macs it
+          # is offered to.
+          for bin in DishWatch dishwatch-helper; do
+            archs="$(lipo -archs "$app/Contents/MacOS/$bin")"
+            echo "  $bin: $archs"
+            case "$archs" in
+              *arm64*x86_64*|*x86_64*arm64*) ;;
+              *) echo "  ERROR: $bin is '$archs', expected a universal arm64 + x86_64 binary" >&2; exit 1 ;;
+            esac
+          done
           brew uninstall --cask faeton/tap/dishwatch-app
+
+      # The formula was only ever installed on Linux, so the Darwin bottles in
+      # it — a different URL and a different sha from the Linux ones — went
+      # straight to users unexercised. Same install the average Mac user runs.
+      - name: install the CLI formula on macOS and run it
+        run: |
+          brew install faeton/tap/dishwatch
+          dishwatch --version
+          sl --version
+          sl --help >/dev/null
 
   formula-linux:
     # The formula claims Linux support in its on_linux block and nothing has

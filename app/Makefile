@@ -245,6 +245,12 @@ test:
 # strips everything after the first dash of `git describe`, so building off an
 # untagged commit yields a DMG named for the PREVIOUS tag — and it notarizes,
 # uploads and installs perfectly while claiming to be a version it is not.
+#
+# The tag alone is not enough, though: `git describe --exact-match` is perfectly
+# happy on a tree with uncommitted edits, so a build from modified sources ships
+# with every version string reading like the tag. Untracked files count too —
+# SwiftPM compiles everything under Sources/ whether git knows about it or not,
+# and .build/ is already ignored, so this is not noisy.
 check-version:
 	@desc="$$(git describe --tags --exact-match 2>/dev/null || true)"; \
 	 if [ -z "$$desc" ]; then \
@@ -260,7 +266,15 @@ check-version:
 	 if [ "$$got" != "$$want" ]; then \
 	   echo "  ERROR: bundle says $$got, tag says $$want" >&2; exit 1; \
 	 fi; \
-	 echo "  version ok — tag $$desc, bundle $$got, DMG $(APP)-$(SHORT_VER).dmg"
+	 dirty="$$(git status --porcelain --untracked-files=all)"; \
+	 if [ -n "$$dirty" ]; then \
+	   echo "  ERROR: tag $$desc, but the tree has uncommitted changes:" >&2; \
+	   echo "$$dirty" | sed 's/^/           /' >&2; \
+	   echo "         every version string would say $$want while the binary is built from something else." >&2; \
+	   echo "         commit or stash first — the tag is the only provenance a downloader has." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "  version ok — tag $$desc, bundle $$got, clean tree, DMG $(APP)-$(SHORT_VER).dmg"
 
 check-identity:
 	@case "$(CODESIGN_ID)" in -|"") \

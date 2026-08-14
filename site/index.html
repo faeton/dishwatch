@@ -1,4 +1,16 @@
+<!DOCTYPE html>
+<!-- This file is served raw by GitHub Pages, so it has to be a whole document.
+     It was first written as a fragment, which meant no doctype (quirks mode)
+     and — the part users would actually have felt — no viewport meta, so every
+     phone laid the page out at ~980px and shrank it to fit. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DishWatch</title>
+<meta name="description" content="A menu-bar monitor for your Starlink dish. Signal, latency, throughput and power, read straight off the dish over your own network. Free and open source for macOS.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#05070F">
 <style>
   /* Design direction and token names are Grok's; the palette is the app's own
      (app/Sources/DishWatch/Theme.swift). Serif display on a deep-space ground,
@@ -230,6 +242,8 @@
 
   @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms !important;animation:none !important}}
 </style>
+</head>
+<body>
 
 <a class="skip" href="#main">Skip to content</a>
 
@@ -521,3 +535,6 @@
     </p>
   </div>
 </footer>
+
+</body>
+</html>

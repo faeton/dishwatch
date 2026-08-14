@@ -65,6 +65,20 @@ jobs:
       # side, which the checked-in golden fixture structurally cannot.
       - run: ./scripts/check-contract.sh
 
+  # The bash fallback's state lock, on both platforms — and it must be both.
+  # The lock has broken once in each direction, each time in a change meant to
+  # help the other platform, and each time invisibly: `go test` never loads the
+  # bash script, and whichever machine the author was sitting at still worked.
+  sl-lock:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-sl-lock.sh
+
   swift:
     runs-on: macos-15
     steps:

@@ -75,9 +75,12 @@ brews:
     install: |
       bin.install "dishwatch"
       bin.install_symlink "dishwatch" => "sl"
+    # `bin/"x"`, not `"#{bin}/x"` — `brew audit --strict` rejects the
+    # interpolated form, and that audit was being discarded wholesale by a
+    # `|| true` in the tap CI, so nothing surfaced it.
     test: |
-      system "#{bin}/dishwatch", "--help"
-      system "#{bin}/sl", "--help"
+      system bin/"dishwatch", "--version"
+      system bin/"sl", "--help"
 
 release:
   github:

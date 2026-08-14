@@ -13,7 +13,7 @@ SHRINK    := -s -w
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 .PHONY: build release clean cross shrink size deps publish publish-dry helper \
-        helper-universal helper-check contract check
+        helper-universal helper-check contract sl-lock check
 
 # Dev build — includes debug info, fast compile.
 build:
@@ -53,8 +53,13 @@ helper-check:
 contract:
 	@./scripts/check-contract.sh
 
+# The bash fallback's state lock, on whatever platform this is. `go test` never
+# touches the bash script, so both times the lock broke it broke unobserved.
+sl-lock:
+	@./scripts/check-sl-lock.sh
+
 # What CI runs, minus the Swift half.
-check: contract
+check: contract sl-lock
 	gofmt -l . | grep -v '^dist/' | (! grep .) || { echo "gofmt"; exit 1; }
 	go vet ./...
 	go vet -tags apphelper ./...

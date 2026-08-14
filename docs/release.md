@@ -298,3 +298,61 @@ GitHub requests; and the Linux job fought `setup-homebrew` over the tap
 directory twice — nesting the repo inside itself, then leaving a real directory
 where the action's cleanup expected its own symlink. The action already
 symlinks the checkout in as the tap, so the correct amount of staging is none.
+
+## Review round, 2026-08-14 (post-v0.1.3)
+
+### The tap CI could go green on a broken tap
+
+Three false-green paths, all now closed.
+
+`brew audit --formula` was wrapped in `|| true`, so *every* formula audit
+failure became a pass. It was written that way to tolerate one unavoidable
+goreleaser artefact — the generated formula carries `version` alongside per-arch
+URLs, which `--strict` calls redundant — but discarding the whole audit to
+silence one false positive also discarded a 404 URL and a stale sha256. Split in
+two: the lint stays advisory and now surfaces as a GitHub warning annotation
+instead of vanishing, and a new fatal step checks every `url`/`sha256` pair in
+every formula and cask against what is actually published. All eight assets in
+the tap verify today; tampering with a hash and pointing a URL at a missing file
+both fail it.
+
+The universality check `echo`ed `lipo -archs` and moved on. A DMG containing
+only the runner's own slice passes install, `stapler` and `spctl` identically to
+a universal one, so CI would have gone green on a build that cannot start on
+half the Macs it is offered. It asserts now.
+
+And the formula was only ever installed on Linux, so the Darwin tarballs — a
+different URL and a different sha from the Linux ones — reached users
+unexercised. The macOS job installs and runs the CLI too.
+
+### The bash lock, broken once in each direction
+
+Covered in full in `docs/optimizations.md`; the release-relevant part is that
+neither break was catchable by anything this project ran. `go test` never loads
+the bash script, and each break was invisible from the platform its author was
+sitting at. `scripts/check-sl-lock.sh` now runs on both platforms in CI and
+asserts the half that a "degrade quietly" bug destroys: that the lock is
+*refused* when genuinely held.
+
+### The landing page was deployed as a fragment
+
+`site/index.html` began at `<title>` — no doctype, no `<html>`, no `<head>`, no
+`<meta name="viewport">`. That shape is fine where something wraps it, and wrong
+for GitHub Pages, which serves the file verbatim. Two consequences: the live
+site rendered in quirks mode, and every phone laid it out at the ~980px default
+and shrank it to fit. Now a complete document.
+
+The desktop rendering is unaffected — the before and after screenshots are
+byte-identical, because the stylesheet already sets `box-sizing` on everything,
+which is the main thing quirks mode would otherwise have changed. There is no
+horizontal overflow at the narrowest width Chrome will render (500px). The
+mobile improvement itself is asserted from the specified behaviour of the
+viewport meta, not measured on a device.
+
+### `check-version` accepted a dirty tree
+
+`git describe --exact-match` is perfectly happy with uncommitted edits, so a
+build from modified sources would notarize and ship with every version string
+reading like the tag. It now requires a clean tree, untracked files included —
+SwiftPM compiles everything under `Sources/` whether git knows about it or not.
+The tag is the only provenance a downloader has.
