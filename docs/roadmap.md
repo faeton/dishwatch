@@ -199,6 +199,21 @@ Three further limits on the evidence, all real:
   distribution identity, receipts, or the review environment — and Apple
   recommends an Apple-issued identity for reliable local-network attribution,
   which makes ad-hoc especially weak evidence about TCC *persistence*.
+
+  **Half-resolved 2026-08-14.** The identity objection no longer applies: a
+  notarized, stapled, universal, sandboxed build signed with a real Developer ID
+  was installed from a quarantined DMG into /Applications and launched cold. It
+  connected — helper ESTABLISHED to 192.168.100.1:9200 — and **no Local Network
+  prompt appeared**. So this is now the same "no prompt, works anyway" result as
+  ad-hoc, under a real identity, through the actual distribution path.
+
+  That removes one of the three limits and strengthens the reading that the
+  prompt does not fire for unicast TCP from a Go BSD socket to a private address
+  on this macOS build. It does **not** make it solved: this account has run the
+  app many times under ad-hoc signing, so a silent pre-existing grant cannot be
+  ruled out from here. The remaining limits — one machine, one OS version, and
+  a never-before-seen user account — still stand, and a clean account is now the
+  single experiment that would settle it.
 - **One machine, one OS version.** Local Network behaviour has moved across
   releases. Re-run on a clean user account with an Apple-issued identity before
   trusting the first-run story, and record prompt, denial, retry and

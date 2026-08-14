@@ -12,15 +12,31 @@ The roadmap's stated priority is **Store first**, but the Store path is the one
 blocked on certificates. Direct distribution works today and is a reasonable way
 to get the app in front of real dishes before review.
 
-## The CLI
+## Cutting a full release
+
+Order matters, and the reason is easy to miss: **the app's version comes from
+`git describe`**. A DMG built before the tag carries the previous version in its
+filename, its `CFBundleShortVersionString` and its notarization — and you will
+not notice until the release page shows `DishWatch-0.1.2.dmg` under `v0.1.3`.
 
 ```
+# 1. tag first
 git tag v0.1.3 && git push --tags
-make publish            # goreleaser: 4 platforms, checksums, tap PR
-make publish-dry        # same, into dist/, no upload
+
+# 2. THEN build and notarize the app, so it picks up the new version
+cd app && make notarize CODESIGN_ID="Developer ID Application: … (BKY9R5336T)" UNIVERSAL=1
+
+# 3. cut the release — goreleaser attaches the DMG via extra_files
+cd .. && make publish
 ```
 
-Requires a clean tree at a tag — goreleaser refuses otherwise.
+`make publish-dry` does everything but upload. Requires a clean tree at a tag;
+goreleaser refuses otherwise.
+
+## The CLI half
+
+goreleaser builds four platforms, writes checksums, and pushes the Homebrew tap
+formula.
 
 Two things to know. The macOS binaries are **not signed or notarized**. Homebrew
 installs are unaffected, because Homebrew's own download does not set the
@@ -206,12 +222,12 @@ Mac still has policy caches and has launched these binaries. The stapled ticket
 means it should also pass offline; that has not been tested with the network
 down.
 
-**Local Network TCC under a real identity on a clean account.** Every
-measurement is from this machine. The connecting process is the helper; the
-prompt identity should be the app, since `Process` preserves responsibility and
-`inherit` covers the sandbox rather than TCC — but the shipped path is a Go BSD
-socket rather than `NWConnection`, which is the stack Apple is least consistent
-about. Needs a second Mac or a fresh account, not another code pass.
+**Local Network TCC on a clean account.** The real-identity half is now done:
+the notarized DMG installed to /Applications and connected to the dish with no
+Local Network prompt at all. But this account has launched ad-hoc builds of the
+app many times, so a silent pre-existing grant cannot be ruled out from here. A
+never-before-seen user account is the one experiment that settles it. See
+roadmap.md Phase 2 for the full evidence and its limits.
 
 **Intel.** The binaries are universal and `lipo` confirms both slices, but
 nothing here has executed the x86_64 slice.

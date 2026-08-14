@@ -77,3 +77,10 @@ release:
     name: dishwatch
   draft: false
   prerelease: auto
+  # The Mac app is not built by goreleaser — it needs Xcode, a Developer ID and
+  # two notary round-trips — so it is attached rather than produced here. Build
+  # it AFTER tagging: the bundle version comes from `git describe`, so a DMG
+  # built before the tag carries the previous version in its name, its
+  # Info.plist and its notarization.
+  extra_files:
+    - glob: app/.build/DishWatch-*.dmg

@@ -303,8 +303,19 @@ notarize-app:
 # what that is — the callers below establish it.
 package-dmg:
 	@rm -f "$(DMG)"
-	hdiutil create -volname "$(APP)" -srcfolder "$(APP_DIR)" \
+	# Stage rather than pointing -srcfolder at the bundle directly. Two reasons:
+	# the staging folder is where the /Applications symlink lives, so the window
+	# opens with the usual drag-here pair instead of a lone icon; and it removes
+	# the ambiguity both reviewers raised about whether -srcfolder on a .app
+	# packages the bundle or its contents. (It packages the bundle — mounted and
+	# checked — but a staging dir makes that unarguable rather than folklore.)
+	@rm -rf .build/dmg-root
+	@mkdir -p .build/dmg-root
+	/usr/bin/ditto "$(APP_DIR)" ".build/dmg-root/$(APP).app"
+	ln -s /Applications .build/dmg-root/Applications
+	hdiutil create -volname "$(APP)" -srcfolder .build/dmg-root \
 	  -ov -format UDZO -quiet "$(DMG)"
+	@rm -rf .build/dmg-root
 	# The image gets a signature but not a hardened runtime — there is no code
 	# in it to harden, and passing --options runtime to a disk image is a no-op
 	# that only muddies the verification output.
@@ -353,6 +364,7 @@ verify-release:
 	 trap 'if [ "$$mounted" = 1 ]; then hdiutil detach "$$mp" -quiet 2>/dev/null || true; fi; rmdir "$$mp" 2>/dev/null || true' EXIT; \
 	 hdiutil attach -nobrowse -readonly -mountpoint "$$mp" "$(DMG)" >/dev/null; \
 	 mounted=1; \
+	 test -L "$$mp/Applications" || { echo "  ERROR: no /Applications symlink in the image" >&2; exit 1; }; \
 	 rm -rf .build/verify && mkdir -p .build/verify; \
 	 /usr/bin/ditto "$$mp/$(APP).app" ".build/verify/$(APP).app"; \
 	 xattr -w com.apple.quarantine "0083;00000000;Safari;" ".build/verify/$(APP).app"; \
