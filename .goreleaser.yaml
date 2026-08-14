@@ -65,7 +65,9 @@ brews:
       branch: main
     directory: Formula
     homepage: https://github.com/faeton/dishwatch
-    description: Starlink dish status, dashboard, and power-bank CLI — talks to the local gRPC API (no auth required)
+    # Under 80 characters, or `brew style` rejects the generated formula —
+    # which nothing checked until the tap grew CI. The previous wording was 100.
+    description: Starlink dish status, dashboard and power-bank CLI over local gRPC
     license: MIT
     commit_author:
       name: goreleaser
