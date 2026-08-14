@@ -2,8 +2,524 @@
 
 > Working backlog. Original findings from a code review on 2026-06-25; revised
 > **2026-08-04** after the macOS app landed and two independent reviews (Codex,
-> Grok). Items are grouped by whether they block the app, the CLI, or both.
-> Measurements are live-dish numbers on darwin/arm64, not estimates.
+> Grok). Revised again **2026-08-14** after a seven-reviewer sweep (five scoped
+> passes plus Codex and Grok) — see [Round 3](#round-3--2026-08-14). Items are
+> grouped by whether they block the app, the CLI, or both. Measurements are
+> live-dish numbers on darwin/arm64, not estimates.
+
+## Round 3 — 2026-08-14
+
+> Seven reviewers over the whole tree: five scoped passes (Go state/accumulators,
+> Go CLI + helper IPC, Swift model, Swift views, docs/build), plus Codex and Grok
+> independently. Three of them found the `ok`-with-no-data defect without seeing
+> each other's work, which is the strongest signal in this round.
+>
+> Build health is green and worth saying plainly: `go vet`, `go build`, `gofmt`,
+> `go test ./...`, `swift build` and `swift test` (11 tests) all pass clean, and
+> `git ls-files` is 70 files with no build artifacts committed. The 529 MB tree
+> is entirely untracked local scratch. **Nothing below is a build failure — the
+> failures are all in what the passing build does.**
+
+### Ship blockers
+
+- [x] **`make app` ships a debug build, which un-does every `#if DEBUG` guard in
+  the repo.** `app/Makefile:19` sets `CONFIG := debug` and line 57 builds
+  `swift build -c $(CONFIG)`. There are exactly three `#if DEBUG` blocks in
+  `app/Sources`, and all three are things written specifically to be excluded
+  from a shipped app. The worst is `HelperProvider.swift:246-254`, whose own
+  comment reads *"Never compiled into a release build — a shipped app that went
+  looking through $PATH could run an unknown binary."* It is compiled in:
+  `DISHWATCH_BIN=<path>` makes the signed, sandboxed bundle exec an arbitrary
+  binary as its helper, and `~/Sites/dishwatch/bin/dishwatch` is still probed.
+  Also live: the "Simulate battery (demo)" toggle (`SettingsView.swift:35`) and
+  `LiveProvider`'s `#if DEBUG` path. Set `CONFIG := release` — but note `make
+  icon` depends on `DISHWATCH_APPICON`, so that target must keep an explicit
+  debug build.
+- [x] **The dev scaffolding in `DishWatchApp.swift:34-58` is not guarded at
+  all**, so it ships regardless of configuration. `Render.runIfRequested()`
+  (pulling in all of `IconCandidates.swift`), `NetProbe.runIfRequested()` —
+  which opens raw BSD sockets and **writes to a file path taken from an
+  environment variable** — and `DISHWATCH_PROBE`, which spawns a *second*
+  `HelperProvider` alongside the app's own, giving two helpers contending the
+  same flock. The roadmap already lists these as "cut before submission"; they
+  need `#if DEBUG` or a separate target, not just a note.
+- [x] **The embedded helper is the entire CLI.** `app/Makefile:65` copies
+  `bin/dishwatch` to `Contents/MacOS/dishwatch-helper`. That binary still
+  carries `speed` (which `exec`s `ping` and `networkQuality`, `misc.go:124,137`
+  — shell-outs that cannot run sandboxed and that the review checklist says to
+  drop), `raw` (arbitrary gRPC to any address), `dash`/`location` (the Nominatim
+  geocoder), and a *"Starlink speed test"* banner string. The app uses exactly
+  four ops. Build the shipped helper from a `cmd/dishwatch-helper` main, or
+  behind a build tag that omits `geo`, `speed`, `raw`, `dash` and `watch`. Until
+  then `Info.plist`'s "nothing is sent anywhere else" is a claim the binary
+  contradicts.
+- [x] **No `PrivacyInfo.xcprivacy`.** The app uses `UserDefaults`
+  (`AppState.swift:16-37`), which is a required-reason API — Apple has wanted a
+  declared reason (`CA92.1` for app-local defaults) since 2024. `app/Makefile:59-67`
+  copies only `AppIcon.icns` and `Info.plist` into the bundle. This is the kind
+  of thing that fails automated validation at upload, before a human sees it.
+  Also add `ITSAppUsesNonExemptEncryption=false` to skip the per-build prompt.
+
+### The helper contract — one bug, several faces
+
+- [x] **`ok` with no `data` is treated as helper death, so a successful reboot
+  reboots the dish twice and silently kills the helper.** Found independently by
+  three reviewers and reproduced. `helper.go:161-185` answers `reboot`,
+  `setAnchor` and `ping` with `{"ok":true}` and no `data`, which is correct.
+  `HelperProvider.swift:169` requires data on every reply:
+  `guard let data = resp.data else { throw .badResponse("ok with no data") }`.
+  So every non-`poll` op throws. `requestLocked` (`:127-136`) reads that as a
+  dead pipe: it increments `consecutiveFailures`, calls `shutdown()` — killing a
+  healthy child — then retries, which spawns a **new** helper (fresh dial + full
+  reflection download, the ~700 ms this architecture exists to avoid) and
+  **sends `{"reboot":{}}` a second time**. The second throw reaches
+  `_ = try? await request(...)` (`:96`) and is swallowed, so `AppState.reboot`'s
+  `catch` (`AppState.swift:115`) is dead code and the user is told nothing after
+  confirming a destructive action.
+
+  `ping` is the sharpest version: its stated purpose is liveness, and calling it
+  *kills the thing it is checking*. Fix by decoding command acknowledgements
+  separately from poll responses — and never auto-retry a non-idempotent op.
+- [x] **`withClient` retries non-idempotent operations.** `helper.go:220-244`
+  wraps every op in redial-and-retry, including `{"reboot":{}}` (`:164-167`). A
+  reboot the dish acks and then drops — the normal case, since it is going down —
+  takes the retry path. Combined with the item above, one click can send four.
+- [x] **Every `poll` failure is reported as success.** `helper.go:207-213`
+  discards the error and returns `offlineDashboard(addr)` with `ok:true`.
+  Defensible for an unreachable dish; the problem is that the branch also
+  catches `decode status`, `decode envelope`, `reflect ... not found` and
+  `service not found in reflected file`. Firmware that renames a field or drops
+  the reflection service therefore reads as "Offline" forever, on a dish that
+  is up and pingable, with the real error going to stderr — which the supervisor
+  routes to `FileHandle.nullDevice` (`HelperProvider.swift:189`). There is no
+  path by which anyone learns what broke. Distinguish `dish.ErrUnreachable`
+  (→ offline dashboard) from every other error class (→ `resp.Error`).
+- [x] **Offline is presented as live.** Because the poll "succeeds",
+  `AppState.refresh` clears `lastError` (`:95`) and `ConnectedPopover.swift:173`
+  prints `live`. So a reviewer with no dish sees a hero reading **Offline** next
+  to a footer reading **live**, over metrics that `offlineDashboard`
+  (`dashboard.go:113-123`) filled from a persisted snapshot of arbitrary age —
+  hour-old `up 5.8 h · boots 139` and an hour-old ping, unmarked. That is the
+  first screen App Review will see. Derive the footer from transport success
+  **and** `DishData.state`, and add a real permission-denied state.
+- [x] **No deadline anywhere on the app side, so a wedge is permanent.**
+  `BufferedLineReader.readLine()` (`HelperProvider.swift:271-282`) blocks on
+  `availableData` with no timeout, and `withCheckedThrowingContinuation` is not
+  cancellable — so `pollTask?.cancel()` cannot free it and every later poll
+  queues behind it on the serial queue, leaking a suspended Task each time. The
+  Go side is only partly bounded: dial is 2 s and calls are 4 s
+  (`internal/dish/client.go:36-37`), but **reflection discovery is not** —
+  `client.go:67` passes the raw parent `ctx`, not `dialCtx`, to
+  `grpcreflect.NewClientAuto` + `FileContainingSymbol`. And `state.Begin()` →
+  `syscall.Flock(fd, LOCK_EX)` (`lock_unix.go:18`) has no `LOCK_NB`, no timeout
+  and no ctx. A dish that accepts TCP and stalls the reflection stream hangs the
+  helper at startup, before its banner — so the app sits on "Connecting…"
+  forever. Even without a hang, one poll's worst case is ~14-16 s
+  (2 dial + 4 fetch + 2 redial + 4 retry + 4 unused `GetLocation`), during which
+  the poll loop is blocked and stale data reads as live.
+- [x] **The claimed restart backoff does not exist.** `HelperProvider.swift:18-20`
+  says the child is "restarted with bounded backoff if it dies". There is no
+  backoff in the file. `consecutiveFailures` gates only the in-request second
+  try; past the threshold `send()` still calls `ensureRunning()`, which spawns a
+  fresh child. A helper that fails its banner check every time therefore forks
+  once per poll — at the default 1 s interval, forever — each paying the 2 s
+  `usleep` spin in `shutdown()` (`:226-229`). It also only resets on a
+  *first-try* success (`:125`), never after a recovered retry.
+- [x] **`Process.terminate()` cannot kill this helper.** Reproduced.
+  `main.go:41` registers SIGTERM with `signal.NotifyContext` for every
+  subcommand, which removes the default terminating disposition; `runHelper`
+  only observes `ctx.Err()` at `helper.go:133`, *after* `sc.Scan()` returns a
+  line. A helper parked in `Scan` or mid-request never sees the signal. The
+  supervisor waits 2 s, sets `process = nil`, and the next poll starts a second
+  helper — two processes on the same `state.json` until the first notices EOF.
+  The flock keeps that from corrupting, but it is not the intended lifecycle.
+- [x] **Smaller protocol defects, all reproduced.** A malformed request is
+  answered without echoing the id (`helper.go:130`), so the Go side's
+  deliberate fail-soft becomes a fail-hard on the client, which sees `id:0`,
+  fails its `resp.id == id` guard (`HelperProvider.swift:163`) and tears the
+  helper down. A line over 1 MB kills the scanner permanently (`helper.go:117-120`)
+  — `bufio.Scanner` cannot resync, so the "cap allocation" guard is a kill
+  switch — and `err != io.EOF` at `:138` is dead, since `Scanner.Err()` never
+  returns `io.EOF`. There is **no `recover()` anywhere in the repo** (verified:
+  zero occurrences), so any panic under `buildDashboard` takes the process down
+  mid-reply; a per-request `defer recover()` turns that into one failed request.
+- [x] **`deinit { queue.sync { shutdown() } }` (`HelperProvider.swift:87`) can
+  self-deadlock.** The request closure at `:112` captures `self` strongly and is
+  released on `queue`; if that is the last reference, `deinit` runs *on* the
+  queue and `queue.sync` deadlocks. Needs a teardown that cannot re-enter.
+
+### Wrong numbers shipped today
+
+- [x] **`renderEnergy` divides observed-only energy by wall-clock time.**
+  `dash.go:574`: `avgW := snap.EnergyWh * 3600 / obsDur` where
+  `obsDur = now - snap.ObsStartTs`. But `EnergyWh` accumulates only *observed*
+  samples, and the gap-wider-than-the-ring branch (`dash.go:154-157`) advances
+  the cursor **without** advancing `ObsStartTs`. `Stats` avoids exactly this by
+  using `Samples` as its denominator (`stats.go:149-152`); energy has no sample
+  counter.
+
+  Worked example: dish boots, CLI runs 10 min at 20 W (`energyWh ≈ 3.33`), user
+  quits for 9 h, reopens. `obsDur ≈ 9h10m` → `avgW ≈ 0.36 W` for a 20 W dish.
+  And because `obsDur` has grown to ≈ uptime, the `obsDur*100 >= UptimeS*95`
+  gate at `:579` selects the **confident** "since boot" phrasing — the longer
+  you are away, the more authoritative the wrong number looks. The same `avgW`
+  is passed to `renderBank` (`:586`) and mirrored in `fillBank`
+  (`dashboard.go:227-229`), so power-bank time-to-empty inflates by the same
+  ~50× factor. This is the most damaging number in the product's headline use
+  case. `estWh` (`:575`) is wrong for the same reason. Give energy its own
+  observed-sample counter.
+- [x] **The zero-cursor bootstrap adds where the reboot path assigns.**
+  `dash.go:177` is `energyWh += joules / 3600`, inside the branch whose own
+  comment (`:158-165`) says it bootstraps "exactly as the reboot path does" —
+  and the reboot path *assigns* (`:138`). `energyWh` was seeded from
+  `prev.EnergyWh`, so a legacy `state.json` carrying a total but no cursor gets
+  the ring folded on top of it. Probed: `prev{EnergyWh: 14.45, LastCurrent: 0}`
+  + a full 900-sample ring at 20 W → **19.45 Wh**, a 5 Wh phantom. The existing
+  test (`energy_test.go:112`) uses `prev.EnergyWh == 0`, where `+=` and `=` are
+  indistinguishable — which is why this survived the round that added the branch.
+- [x] **A negative cursor delta freezes energy but re-counts stats.** Probed.
+  `dash.go:145-157` has no `delta < 0` branch, so neither sub-branch fires,
+  `lastCur` is never updated, and no energy accrues until the dish's cursor
+  climbs back past the stale value. `sessionstats.go:72-74` does the opposite —
+  clamps `n` to 0 but still assigns `st.LastCurrent = cur` (`:89`) — so the next
+  poll re-folds samples it already counted. Actual: `prev{EnergyWh:30,
+  LastCurrent:5000}` + `cur=100` → energy frozen at 30 with cursor stuck at
+  5000, while stats jump their cursor to 100. The two files then describe
+  different windows, printed on adjacent lines: precisely the skew the
+  transaction lock was built to prevent, arriving through arithmetic instead of
+  a race. Reachable if `current` resets without a bootcount bump (history
+  service restart, firmware update).
+- [x] **A corrupt `state.json` silently resets the energy total, and writes are
+  not durable.** `dash.go:75` discards `Load`'s error, so a parse failure gives
+  `prev == nil` → `reboot == true` (`:119`) → re-bootstrap from the ring. That is
+  the same symptom this file celebrates fixing on the bash side ("seeded with a
+  real 14.45 Wh total… rewrote it as 5.99 Wh"): the truncation window is closed
+  but "unparseable" is still treated as "no prior state". Compounding it,
+  `writeFileAtomic` (`store.go:94-113`) never `fsync`s the temp file or the
+  parent directory around the rename — and this tool's whole audience runs dishes
+  off batteries in vehicles, where an abrupt power cut is the normal shutdown.
+- [x] **Epoch reset has no hysteresis.** `dash.go:119` and `sessionstats.go:38`
+  treat uptime going backwards by one second as a reboot, wiping every
+  accumulator irrecoverably. One rounded-down uptime report destroys hours of
+  observed statistics.
+
+### Corrections to Round 2
+
+- [x] **"The read side needs the lock too" is marked `[x]` and is half done.**
+  `buildDashboard` was fixed (`dashboard.go:169`, `BeginRead` spanning both
+  loads). The terminal path was not: `renderObserved` calls `state.LoadStats()`
+  bare at `dash.go:514` and `renderEnergy` calls `state.Load()` bare at
+  `dash.go:565`, two unlocked reads whose output prints four lines apart. The
+  irony is that `lock.go:32-33` cites `"obs 21m 8s @ 22.7 W"` as the motivating
+  symptom, and that string is printed by the **unfixed** path. The same item
+  also claims the fix "also fixes `renderEnergy` re-reading what was just
+  written" — it does not, and the file separately lists that as still open.
+- [x] **"All save errors are silently discarded" sits inside a `[x]` item and is
+  still true.** `dash.go:90,91` and `sessionstats.go:91` all discard. A
+  read-only or full cache dir freezes energy and stats with no user-visible
+  signal, and once the stall exceeds the ring the missing energy is permanently
+  unrecoverable. Worse, `state.Save` failing while `SaveStats` succeeds desyncs
+  the two files in exactly the way the lock exists to prevent — a partial
+  failure, which no lock can help.
+- [x] **Teaching bash the lock does not close the cross-file skew.** Bash locks
+  and advances only `state.json`; `stats.json` is Go-only by design. So Go
+  writes both cursors at C, `sl watch` runs alone for 30 min advancing only
+  energy, and the next Go poll sees a stats gap wider than the ring, adds
+  nothing, and advances the stats cursor — permanently omitting those 30 minutes
+  from `Observed` while energy counts them. Either give one implementation sole
+  authority over both files, or have every writer update both.
+- [x] ~~**No Swift tests.**~~ Done — 11 tests, passing, including the golden
+  fixture. This file says so at two other points; the checkbox was stale.
+- [x] ~~**Connection reuse / `PollOnce` would preserve the bug.**~~ Both resolved
+  by the helper; superseded by the helper item above. The performance table
+  below still describes the app as spawning `dishwatch json` every second, which
+  it has not done since Phase 3.
+- [x] **`state.SetDir` is never called outside tests**, so the sandboxed app and
+  a terminal `sl` keep entirely separate accumulators inside and outside the
+  container. That is probably the right behaviour under MAS, but it means a user
+  who has been running the CLI sees the app start its history from zero — and it
+  means the cross-process contention `lock.go:14-16` gives as the lock's
+  motivation cannot occur in the shipped build. Decide and document which it is.
+
+### The UI spec is written, tested, and not wired up
+
+- [x] **`macos-ui.md` is unimplemented, while the two strings it was written to
+  delete are still shipping.** `grep -rn "observed" app/Sources/DishWatch/Views/`
+  returns nothing but `@ObservedObject`. `DishData.observed` is decoded
+  strictly, constructed in `.sample`, covered by 11 tests — and read by no view.
+  Meanwhile `ConnectedPopover.swift:90` still shows `max` over 60 s as a peak
+  (the defect the doc opens with) and `CompactWidget.swift:58-59` still shows
+  `avg` throughput as capability (the one it calls dangerous: an idle dish on a
+  flawless link renders `avg 3`, which reads as broken). The cold-start rule —
+  `—`, never `peak 0`, never a silent fall back to the 60 s mean — is
+  unimplemented, and the current code is exactly the prohibited fallback. The
+  load-bearing tooltip exists only in the `.md` file. **All the honesty
+  machinery is built; none of it is on screen.**
+- [x] **The battery workflow is a mock-up end to end.**
+  `BatterySetupSheet.swift:69` is `DWButton(title: "Calibrate")` with no
+  `action:`, so it takes the default `{}` (`Components.swift:179`) — and the Tip
+  text at `:60` explicitly instructs the user to tap it. "Start tracking"
+  (`:70-78`) is a comment plus `dismiss()`. `charge`/`capacity`/`onBattery` are
+  `@State` read by nothing, never seeded from `d`, so reopening on an anchored
+  78% bank shows 100%. The "Custom ›" chip is a bare `HStack`, not a button.
+  `CompactWidget.swift:104` is a `Text` styled as a button.
+  `HelperProvider.setAnchor` has **no callers**. And even fully wired,
+  `BatteryPopover.swift:22` presents it via `.sheet`, which
+  `PopoverView.swift:10-12` already documents as unusable from a non-activating
+  `MenuBarExtra(.window)` panel. Wire it or hide the entry points; shipping a
+  primary CTA that does nothing is worse than not having the feature.
+- [x] **The always-on-top widget has no provenance or staleness signal at all.**
+  `CompactWidget` / `PinnedPanel` never read `isLive`, `lastError` or
+  `hasLoaded`. With no helper, `SampleProvider` jitters the mockup numbers every
+  tick, so the pinned widget shows **142.5 Mbps with a moving sparkline** and
+  looks entirely live. `ConnectedPopover.swift:162-174` gets this right; the
+  widget never got the same treatment. It also has no `hasLoaded` gate, so it
+  shows a false "Offline" card at every launch, and `CompactWidget.swift:85`
+  hardcodes green for drop — 100% packet loss renders green.
+- [x] **The menu bar itself has no staleness state.** `AppState.swift:97-101`
+  keeps the last-good snapshot and overwrites only `state`, so
+  `MenuBarIcon.swift:19,44` shows the last `signalScore`/`pingMs` indefinitely
+  with a tooltip reading `Offline · 18 ms · 4↓ Mbps · sig 78`. It is the primary
+  surface and the only one with no honesty gate.
+- [x] **`MenuBarLabel` rasterizes a SwiftUI view on the main actor every poll.**
+  `MenuBarIcon.swift:15-29` builds an `ImageRenderer` in `body` and takes
+  `@ObservedObject var store: AppState` whole, so ~4 glyph-relevant fields
+  invalidate on all ~40. At the default 1 s interval that is a full render plus
+  `NSImage` allocation every second, forever — the app's dominant idle cost, and
+  `DishData` is not `Equatable`, so there is no way to gate it. Note the
+  backlog's "`.second()` clock re-renders every second" diagnosis is **wrong**:
+  `Text(_:format:)` renders statically. The real defect there is that the clock
+  is only as fresh as the poll interval while displaying seconds precision.
+
+### Contract, CI, and hygiene
+
+- [x] **`state` is decoded leniently, so version skew renders fresh metrics
+  under a wrong header.** `DishData.swift`'s `s()` helper uses `try?`, which
+  swallows type errors as well as absences — and it covers `state`, the
+  discriminator. A Go side emitting `"CONNECTED"` or adding a `"Booting"` state
+  decodes to `.offline` with everything else intact and the footer saying live.
+  Good news: **there is no key drift today** — every `json` tag in
+  `dashboard.go:17-84` has a matching Swift `CodingKey`, with `sessDropAvg`
+  deliberately undecoded. Make `state` and a new `schemaVersion` strict, leave
+  genuinely optional metrics lenient.
+- [x] **The golden fixture cannot catch the drift it exists for.**
+  `ObservedStatsTests.swift:147` decodes a checked-in file, so a Go-side rename
+  leaves the fixture untouched and the test green. Add a Go test that reflects
+  over `Dashboard`'s tags and diffs them against a checked-in list the Swift
+  test also asserts against — that catches renames on the side that makes them.
+  Note the helper's `protocol: 1` versions the envelope only; a Dashboard field
+  rename needs no bump and raises nothing on either side.
+- [x] **There is no CI.** No `.github/` at all. The release path is `make
+  publish` from one laptop with a `gh` session, with no test gate — it will
+  happily ship a red tree. A workflow running `go vet`, `go test`, `swift test`
+  and `GOOS=windows go vet ./...` (which is the only thing that would ever
+  exercise `lock_other.go`) is the cheapest durable win in this document.
+- [x] **`.goreleaser.yaml:24` sets `-X main.commit={{.Commit}}` against a symbol
+  that does not exist.** There is no `commit` variable in package `main`; `-X`
+  against a missing symbol is silently ignored. This is the exact trap
+  `main.go:18-22` documents having already been burned by for `version`.
+- [~] **`lock_other.go:19-21` returns `nil` from `lockFile`**, so every caller on
+  a non-unix build believes it holds a transaction. No warning, no error, no way
+  to tell. `GOOS=windows go build ./...` succeeds today.
+- [~] **`Txn` is not reentrant and self-deadlocks.** Probed on darwin: holding
+  `Begin()` and then calling `BeginRead()` in the same process blocks forever —
+  flock arbitrates per open file description, so a second `os.OpenFile` conflicts
+  with the first. No current path nests, but `pb.go:88-90` reasons about the
+  hazard in prose while `lock.go` offers callers no guard, no `Locked()`
+  accessor and no panic-on-nest. One edit away from hanging the helper, which
+  has no timeout to save it.
+- [x] **The `grpcreflect` client is never `Reset()`** (`client.go:67`), so the
+  reflection stream stays open for the helper's whole life and cleanup falls to
+  a finalizer that can block all finalizers process-wide against an unresponsive
+  dish. One line: `defer rc.Reset()` after the descriptors resolve.
+- [ ] **`grpc.DialContext` + `WithBlock` are deprecated** (`client.go:59-62`).
+  Worth flagging for whoever does it: `grpc.NewClient` is lazy, so the
+  `defaultDialMS` timeout and the `ErrUnreachable` classification at `:64` both
+  disappear and must move to the first RPC — and `helper.poll`'s offline branch
+  and `dieUnreachable` depend on that classification.
+- [x] **README inaccuracies.** `sl watch` default is **3** s, not 5
+  (`main.go:106`, `sl:857`). "Feature parity is 1:1 today" is false — Go has
+  `json` and `helper`, bash has neither. `json` is undocumented despite being
+  what the whole app depends on. And `main.go:126` prints *"(more commands
+  coming — bash `sl` still has the full set)"* on every `--help`, which is now
+  backwards. `app/README.md:5` links a `DishWatch.dc.html` that does not exist.
+  Root `make build` produces `bin/sl`, but `app/Makefile:35` needs
+  `../bin/dishwatch` — the root Makefile never builds what the app build needs.
+
+### CLI robustness (not app-blocking)
+
+- [ ] **Quitting `sl watch` mid-fetch abandons a state transaction.**
+  `watch.go:187-193` cancels and returns while the fetch goroutine may be inside
+  `snapshotAndLog`, so the process can exit between `state.Save` (`dash.go:91`)
+  and `integrateStats` (`:92`). The lock protects against concurrent writers,
+  not against the holder exiting mid-sequence.
+- [ ] **Terminal restore does not cover a panic in the render goroutine.**
+  `watch.go:42-48`'s `defer restore()` handles `q`, SIGINT, SIGTERM and a main
+  goroutine panic — not SIGHUP (closed terminal, dropped ssh) and not a panic in
+  the fetch/render goroutine at `:126-137`. With no `recover()` in the tree, one
+  nil deref leaves the user's tty in raw mode with the alt screen active.
+- [x] **`geo.Reverse` — the doc's characterisation needs correcting.** It is at
+  `dash.go:401` (not ~368), it is bounded at 3 s (not "can take 3 s and stall
+  indefinitely"), the watch spinner does keep turning because it runs in the
+  fetch goroutine, and **it is not on the app path at all** — `buildDashboard`
+  never geocodes, so the privacy-label exposure the roadmap describes is
+  currently zero. What is genuinely wrong: it is the only `context.Background()`
+  in a request path in the repo, so Ctrl-C cannot interrupt it; negative results
+  are cached as `"unknown"` **permanently** with no expiry, so one transient DNS
+  failure or 429 poisons that cell forever; there is no pruning of `geo_*.txt`
+  anywhere; and on a moving dish the `%.2f` ≈ 1.1 km grid means a new uncached
+  3 s request every ~40 s at highway speed against a service with a 1 req/s
+  policy. `internal/geo/geo.go:20`'s `userAgent = "sl-cli/1.0"` also violates
+  that policy, which requires contact information.
+- [ ] **Exit codes disagree about the same fault.** `runDash` and `runJSON`
+  return `nil` on an unreachable dish (exit 0); `runStatus` returns the error
+  (exit 1). `sl watch foo` and `sl events foo` silently discard the parse error
+  and use the default. `sl speed` exits 0 even when both probes fail
+  (`misc.go:140,144`).
+- [x] **`runPb` anchors against stale state on failure.** `pb.go:191-193` prints
+  a warning and proceeds. Since an anchor is only meaningful as a (pct, energyWh)
+  pair, a stale `energyWh` permanently skews every later depletion estimate —
+  the exact failure `setAnchor`'s own comment at `:80-87` warns about,
+  reintroduced one level up.
+
+### Round 3 — what shipped, and what did not
+
+**Done, and verified rather than asserted.** Each of these was reproduced before
+the fix and re-run after:
+
+- SIGTERM now kills the helper (`kill -TERM` on a helper blocked in its read
+  loop: *STILL ALIVE* → dies).
+- A 1.5 MB request line is answered `request too long` and the next request on
+  the same stream still succeeds; it used to end the process permanently.
+- `ping`, `reboot` and `setAnchor` acknowledge without `data`, and the client no
+  longer treats that as a dead pipe.
+- The `apphelper` build contains zero occurrences of `networkQuality`,
+  `nominatim.openstreetmap.org`, `Starlink speed test` or `os/exec.Command`, and
+  is 2 MB smaller. `app/Makefile` refuses to assemble a bundle from a helper
+  that fails that check.
+- The release app binary contains zero occurrences of `DISHWATCH_BIN`,
+  `DISHWATCH_NETPROBE`, `DISHWATCH_APPICON`, `DISHWATCH_PROBE` or
+  `Sites/dishwatch`; the debug build still has all five, which is what makes the
+  guards real rather than decorative.
+- `scripts/check-contract.sh` was negative-controlled: renaming `downMbps` on
+  the Go side alone fails it, which is exactly the drift the golden fixture
+  cannot see.
+- The two energy bugs are pinned by tests that were negative-controlled against
+  the pre-fix code — reintroducing the fold publishes **19.45 Wh** where 14.45 is
+  correct, and removing the rewind branch leaves the cursor frozen at 5000.
+
+**Partly done, marked `[~]` above:**
+
+- `Txn` reentrancy is now documented in detail but **not enforced**. A
+  process-wide guard was written and removed: flock deadlocks a nested acquire
+  on one goroutine, but two goroutines contending is legitimate and blocks
+  correctly — `TestBeginIsExclusive` does exactly that, and the guard failed it.
+  Go has no goroutine identity to distinguish them, and a guard that misfires is
+  worse than a comment.
+- `lock_other.go` no longer lies silently: `lockingSupported` is false there and
+  `Txn.Degraded()` exposes it, and CI cross-compiles for windows so the file is
+  at least built. No caller warns on it yet, because nothing ships on a non-unix
+  platform today.
+
+**Deliberately not attempted in this pass** — all still open below, none of them
+ship blockers: adaptive polling and the `get_status`/`get_history` split (Phase
+4, and the reason Phase 4 exists); skipping the `state.json` write when the
+cursor has not moved; the `grpc.NewClient` migration (it moves the unreachable
+classification that `dieUnreachable` and the helper's offline branch both depend
+on, so it wants its own change); vendoring the proto; Swift 6 strict
+concurrency; `os.UserCacheDir()`; the `watch.go` quit-mid-transaction and
+SIGHUP/goroutine-panic terminal restore; the exit-code inconsistencies; and the
+`fillBank`/`pbRenderBank` duplication.
+
+One thing removing the wasted `get_location` call already bought: it was a third
+of every poll's dish time, so Phase 4 starts from a lower baseline than the
+measurements in this document assume. Those numbers want re-taking.
+
+### Round 3b — the fixes reviewed, and seven regressions they introduced
+
+Codex and Grok re-reviewed the diff adversarially. They agreed on the top three,
+and every one below is a defect the fixes themselves created. Recorded because
+the pattern is the point: four of the seven are a *new* guard firing in the one
+situation it was written for.
+
+- [x] **The banner deadline was shorter than the helper's own announce path.**
+  Both reviewers' top finding. `runHelper` dialled before writing the banner —
+  up to 2 s connect plus 3 s reflection — while the supervisor allowed the
+  banner 2 s. So exactly when the dish is absent or stalling, which is the case
+  every one of these timeouts exists for, the app killed a healthy helper for
+  being slow to say hello and retried on a backoff forever. First launch with no
+  dish is a core demo path and it would have failed there. The banner is now
+  emitted first and the dial is a background goroutine: **measured 8 ms to
+  banner against an unroutable address, against a 2 s deadline.**
+- [x] **`ping` blocked on the warm-up dial.** Found while verifying the above,
+  by measuring rather than reading: the background dial holds `h.mu`, so the
+  first ping waited 2 s against its 1 s deadline — a liveness probe that would
+  have killed the helper for being alive. `ping` now answers before taking the
+  mutex, which is what its own comment always claimed it did.
+- [x] **`EINTR` still led to a blocking read.** `waitReadable` returned
+  `.readable` on a signal-interrupted `poll(2)`, and the caller went straight
+  into `availableData` with nothing necessarily buffered. It now re-arms against
+  the same deadline.
+- [x] **The new backoff disabled the one-free-retry it sits next to.**
+  `shutdown()` scheduled a backoff, and the retry immediately after it called
+  `ensureRunning`, which refuses to launch before that deadline. So a helper
+  dying mid-request always cost a poll instead of costing nothing. Backoff now
+  lives only where a *launch* fails.
+- [x] **`Quality` was worse than the bug it replaced.** It mapped every
+  non-connected state to `.offline`, whose caption is "no dish at this address"
+  — and `swiftState` maps every non-connected, non-disabled dish state to
+  `Weak`, so a live dish on an imperfect link was captioned as an absent one.
+  `.weak` is live, `.disabled` is its own case. Pinned by `QualityTests`, which
+  was negative-controlled against the regression.
+- [x] **A missing helper rendered as "sample data".** `MissingHelperProvider`
+  sets `isLive = false`, which fell through to `.sample` — telling a user with a
+  broken install that they were looking at a demo. Now `.brokenInstall`.
+- [x] **The migration case produced a spectacular average.** The sharpest catch
+  of the round. A legacy snapshot has a real `energyWh` and no `obsSeconds`, so
+  the next poll paired hours of accumulated energy with a denominator counting
+  only the seconds since the upgrade: **measured 5802 W for a 20 W dish**, and
+  the coverage gate made it read as a confident "since boot" figure. `ObsSeconds`
+  now has a third state, `ObsSecondsUnknown` (-1): an epoch whose count cannot
+  be reconstructed offers no average at all until the next reboot resets it.
+  Mirrored in the bash `sl`.
+
+Also from the re-review, smaller: the bash side carried `obsSeconds` but still
+divided by wall clock when *rendering* (fixed, both the Energy line and the
+unanchored battery estimate); `fetchDash` discarded the persistence error so the
+CLI never surfaced it (fixed, on stderr, and deliberately not in `watch` where it
+would corrupt the alt screen); the app stored `warning` and no view drew it
+(fixed); Settings still said "Live" via `isLive` and told Store users to install
+a CLI (fixed); `BatteryPopover` never dimmed stale data (fixed); an exactly-5 s
+uptime regression escaped the new slack (fixed by adding a halving rule in
+`state.IsRestart`, mirrored in bash); and CI vetted the `apphelper` build without
+testing it (fixed).
+
+One re-review finding was **not** a defect: Codex reported `BufferedLineReader`
+still `private` and the new tests therefore uncompilable. It had already been
+made internal; the reviewer read a snapshot from before that edit. The suite
+compiles and runs.
+
+### Test gaps worth closing
+
+`integrateEnergy` is at 90%, `integrateStats` 86.8%, `accumulate` 100% — and
+**`snapshotAndLog` is at 0%**. The headline fix of Round 2, one lock spanning
+both files, has no test at all. The highest-value additions:
+
+- After `snapshotAndLog`, assert `state.json.lastCurrent == stats.json.lastCurrent`;
+  then the same with a competing writer running during the call.
+- Cursor rewind, both accumulators, asserting they stay consistent (D-4 above).
+- Zero-cursor bootstrap with a **non-zero** prior total (the `+=` bug — the
+  existing test uses zero, where `+=` and `=` agree).
+- Reboot and zero-cursor clamps (`nb > ringLen`, `nb > cur`) for both integrators,
+  asserted to agree, since "the shared bootstrap rule" is what the docs claim.
+- `renderEnergy` after a gap wider than the ring — there is no render-layer test
+  at all, which is why the `avgW` collapse survived.
+- Save-failure paths, which currently assert nothing because nothing happens.
+
+Three branches show as uncovered but are **dead, not untested** — `dash.go:141-143`,
+`dash.go:184-186` (`obsStartUp < 0` cannot fire; `nb` starts at `uptime` and only
+shrinks) and `sessionstats.go:81-83` (`n > ringLen` is already clamped by both
+branches above it). Delete them rather than writing tests for them.
 
 ## Correctness — fix regardless of architecture
 

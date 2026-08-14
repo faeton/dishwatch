@@ -1,3 +1,11 @@
+#if DEBUG
+// Development scaffolding: excluded from release builds.
+//
+// This file is a build-time / diagnostic tool, not a feature. It used to be
+// compiled into the shipped bundle because app/Makefile built `-c debug`, which
+// made every guard like this one inert. See docs/roadmap.md "Cut before
+// submission".
+
 import SwiftUI
 import AppKit
 
@@ -136,3 +144,5 @@ private struct GlyphBarsPip: View {
         .shadow(color: Color(hex: 0x37D7FF).opacity(0.45), radius: 1.2)
     }
 }
+
+#endif

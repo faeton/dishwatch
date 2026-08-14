@@ -43,6 +43,12 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT licensed. Not affiliated with SpaceX or Starlink.</string>
+	<!-- The app uses no encryption beyond what the OS provides, and talks only
+	     to a device on the local network over plain TCP. Declaring it here
+	     answers the export-compliance question once, at build time, instead of
+	     prompting on every upload to App Store Connect. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<!-- Shown verbatim in the Local Network permission prompt. This is a
 	     review-visible surface: it has to explain the 192.168.100.1 traffic in
 	     the user's terms, not ours. -->

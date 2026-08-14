@@ -15,6 +15,17 @@
 >
 > This doc supersedes the original "planned, not started" roadmap, whose phase
 > order is now obsolete — the UI got built before the core split.
+>
+> **Update 2026-08-14.** A seven-reviewer round found that the engine decision
+> was right and the engine's *implementation* is not yet a 24/7 Store process:
+> no request deadline on either side of the pipe, no restart backoff despite the
+> code claiming one, a `terminate()` the helper cannot receive, and a response
+> contract that reads a successful reboot as helper death. Separately, `make
+> app` builds `-c debug`, so every `#if DEBUG` guard written to keep dev
+> scaffolding out of the shipped app is currently inert. The critical path is
+> now [Phase 3.5](#phase-35--what-has-to-happen-before-anything-else), not
+> Phase 4. Full findings in
+> [optimizations.md](optimizations.md#round-3--2026-08-14).
 
 ## Goal
 
@@ -263,6 +274,7 @@ needs it (it does), which is true under all three options.
 | ~~**1**~~ | ~~Real `.app` bundle~~ | **done** — `make app` |
 | ~~**2**~~ | ~~**Decision spike** — sandboxed local-network reachability~~ | **done — no veto; A vs B vs C still open** |
 | ~~**3**~~ | ~~Engine behind `DishProvider`; kill the *external* subprocess~~ | **done** — supervised embedded helper |
+| **3.5** | **Ship blockers + helper hardening** — see [below](#phase-35--what-has-to-happen-before-anything-else) | Nothing else starts until this closes |
 | **4** | Adaptive polling, split RPCs, idle cost near zero | |
 | **5** | Contract hardening: `schemaVersion`, strict decode, golden fixtures shared by Go and Swift | Precondition for the `Observed` row below |
 | **5a** | Metric presentation per [macos-ui.md](macos-ui.md) — session footer, peaks over means | Needs 5, or a zero-default carve-out |
@@ -270,10 +282,97 @@ needs it (it does), which is true under all three options.
 | **7** | Submission + App Review | |
 | **8** | *(optional)* notarized direct build via `cmd/dishwatchd`; Windows tray | |
 
-Phase 4 is now the critical path. The helper removed the per-poll dial, which
-is what made a fixed 1 Hz cadence defensible; with that gone, adaptive polling
-and splitting `get_status` from `get_history` are where the remaining battery
-cost lives.
+~~Phase 4 is now the critical path.~~ **Superseded 2026-08-14.** Phase 4 is
+correct product work and it is not what App Review, or a reviewer without a
+dish, will fail us on. A 1 Hz menu-bar app can pass review; a bundle that ships
+a debug build with an arbitrary-binary env hook, a footer reading "live" over an
+offline dashboard, and a nested copy of the full CLI including `networkQuality`
+will not. Phase 3.5 below is the critical path. The helper still removed the
+per-poll dial, and adaptive polling remains where the battery cost lives — just
+after the app stops being rejectable.
+
+## Phase 3.5 — what has to happen before anything else
+
+From the 2026-08-14 review round (seven reviewers; findings and evidence in
+[optimizations.md](optimizations.md#round-3--2026-08-14)). Ordered so that each
+step is independently shippable and the riskiest thing is never the last thing.
+
+**1. Stop shipping a debug build.** `app/Makefile:19` → `CONFIG := release`,
+keeping an explicit debug build for `make icon` (it needs `DISHWATCH_APPICON`).
+Then `#if DEBUG` the three call sites in `DishWatchApp.swift:34-58` and the
+whole of `Render.swift`, `NetProbe.swift`, `IconCandidates.swift` — or move them
+to a target excluded from the app product. This one change removes the
+`DISHWATCH_BIN` arbitrary-exec hook, the demo battery toggle, the raw-socket
+prober and the env-var-controlled file write from the signed bundle at once.
+
+**2. Build a real helper, not a copy of the CLI.** A `cmd/dishwatch-helper`
+main, or a build tag that omits `geo`, `speed`, `raw`, `dash` and `watch`. Four
+ops ship: `poll`, `reboot`, `setAnchor`, `ping`. This is what makes
+`Info.plist`'s "nothing is sent anywhere else" true, and it deletes the
+`networkQuality`/`ping` shell-outs and the Nominatim client from the submission
+in one move.
+
+**3. Fix the `ok`-with-no-data contract.** Decode command acknowledgements
+separately from poll responses so `reboot`/`setAnchor`/`ping` stop being read as
+helper death. Never auto-retry a non-idempotent op — that means removing
+`reboot` from `withClient`'s redial-and-retry (`helper.go:220-244`) as well as
+fixing the Swift side. Let `reboot`/`setAnchor` throw so `AppState`'s `catch`
+stops being dead code.
+
+**4. Deadlines, then backoff, then a kill that works.** Per Grok's prescription,
+which matches what the other reviewers found independently:
+
+- `internal/dish/client.go:67` — wrap reflection in `context.WithTimeout` (~3 s).
+  It currently takes the process ctx, so a dish that accepts TCP and stalls the
+  reflection stream hangs the helper before its banner, forever.
+- `helper.serve` — a per-request `WithTimeout` (~12 s) covering `withClient`'s
+  redial, rather than passing the process ctx down.
+- Swift is the watchdog: `BufferedLineReader.readLine` takes a deadline
+  (`DispatchIO`, or a readability handler plus a timer). Banner 2 s, `ping` 1 s,
+  `poll` 15 s, `reboot` 10 s. On expiry kill the child; do not wait on it.
+- Backoff: `min(10s, 0.2s * 2^n)`, reset only after a banner **and** one `ok`
+  reply. Do not loop on `protocolMismatch` or a missing binary. (Note: the claim
+  that the current code eventually stops spawning is wrong — `send` still calls
+  `ensureRunning()` on every poll, so it forks once per second indefinitely.)
+- Killing: drop `signal.NotifyContext` for helper mode so default SIGTERM works;
+  parent closes stdin, waits ~200 ms, then `SIGKILL`. Never abandon a live pid
+  the way `shutdown()` does today after its 2 s wait.
+- Add a per-request `defer recover()`. There is no `recover()` anywhere in the
+  repo, so any panic under `buildDashboard` currently kills the process
+  mid-reply.
+
+Keep the framing exactly as it is — one stdin/stdout pair, JSON lines, `id`
+echo, banner, stdout protocol-only. Half-duplex matches the serialized state
+writes, and no reframing fixes a hang or a signal.
+
+**5. Stop presenting offline and stale as live.** Split `dish.ErrUnreachable`
+(→ offline dashboard) from every other error class (→ `resp.Error`), so firmware
+drift is diagnosable instead of reading as "Offline" forever. Derive the footer
+from transport success **and** `DishData.state`. Give the menu bar and the
+pinned widget a staleness treatment — the widget currently has no provenance
+signal at all and will happily animate `SampleProvider`'s 142.5 Mbps as live.
+Add a permission-denied state and a first-run "no dish found" screen, since that
+is the first thing App Review sees.
+
+**6. `PrivacyInfo.xcprivacy`** declaring the app-local `UserDefaults` reason
+(`CA92.1`), copied into `Contents/Resources` by `app/Makefile`. Add
+`ITSAppUsesNonExemptEncryption=false` while there.
+
+**7. The energy numbers that are wrong today.** These ship in the CLI right now
+and are independent of everything above: give energy its own observed-sample
+counter so `avgW` stops dividing observed joules by wall-clock time
+(`dash.go:574`, which also poisons the power-bank estimate); change `+=` to `=`
+at `dash.go:177`; handle a negative cursor delta symmetrically in both
+accumulators. Then close the test gaps — `snapshotAndLog` is at **0%** coverage,
+so Round 2's headline fix is untested.
+
+**8. Then decide about `reboot` at all.** Both review rounds have now suggested
+cutting it from v1. It is a destructive LAN action behind a confirmation dialog
+that may not even receive clicks from a non-activating panel, and it is where
+the retry bug did its damage. Shipping without it costs one feature and removes
+a whole category of review anxiety.
+
+Only after that: Phase 4.
 
 The `internal/model` + `internal/service` extraction is no longer on the app's
 critical path at all — under Option C the app never imports Go, it talks to it.

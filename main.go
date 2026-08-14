@@ -21,6 +21,13 @@ import (
 // unversioned without saying so.
 var version = "dev"
 
+// commit is stamped the same way: -X main.commit=$(COMMIT). .goreleaser.yaml has
+// been passing that flag against a symbol that did not exist — the exact trap
+// documented above for `version`, still live for this one. Declared so the flag
+// takes effect, and surfaced by `--version` so a stamping regression is visible
+// rather than silent.
+var commit = "none"
+
 func parsePositiveInt(s string) (int, error) {
 	n, err := strconv.Atoi(s)
 	if err != nil {
@@ -38,8 +45,23 @@ func main() {
 		cmd = os.Args[1]
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	// Interactive commands trap SIGINT/SIGTERM so they can restore the terminal
+	// and finish a state transaction. The helper deliberately does not.
+	//
+	// signal.NotifyContext *replaces* the default disposition: once SIGTERM is
+	// registered it no longer terminates the process, it only cancels a context
+	// somebody has to be watching. runHelper spends its life blocked reading
+	// stdin, where nothing observes that context — so the supervisor's
+	// Process.terminate(), which is a plain SIGTERM, did nothing at all. The
+	// parent waited two seconds, gave up, and started a second helper against
+	// the same state files. Leaving the default in place means terminate()
+	// works; stdin EOF still covers the app-crashed case.
+	ctx := context.Background()
+	if cmd != "helper" {
+		var cancel context.CancelFunc
+		ctx, cancel = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+	}
 
 	switch cmd {
 	case "status":
@@ -112,6 +134,8 @@ func main() {
 		if err := runWatch(ctx, every); err != nil {
 			die(err)
 		}
+	case "-v", "--version", "version":
+		fmt.Printf("dishwatch %s (%s)\n", version, commit)
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -123,7 +147,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|history|location|loc|map|reboot|raw '<json>'|speed|pb [pct [wh] | -]|json]")
-	fmt.Fprintln(os.Stderr, "       (more commands coming — bash `sl` still has the full set)")
+	fmt.Fprintln(os.Stderr, "       json — machine-readable snapshot (what the macOS app consumes)")
 }
 
 func die(err error) {

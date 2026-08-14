@@ -46,6 +46,27 @@ type Txn struct {
 	f *os.File
 }
 
+// NOT REENTRANT, and the failure mode is a permanent hang rather than an error.
+//
+// flock arbitrates per *open file description*, so a second Begin/BeginRead
+// from the same process opens a second descriptor and blocks against the first
+// — forever, since nothing in this package takes a timeout. Verified on darwin.
+// A blocking wait between two goroutines is correct and intended (see
+// TestBeginIsExclusive); what must never happen is one call path acquiring the
+// lock and then calling something that acquires it again.
+//
+// No current path nests: runPb → runDashSilent → setAnchor and
+// helper.poll → fetchDash → buildDashboard are all sequential. It is one edit
+// away, so if you add a call inside a transaction, check what it loads. A
+// process-wide guard was tried and removed — it cannot tell a nested acquire
+// from a legitimately concurrent one, and misfired on the exclusion test.
+
+// Degraded reports that this Txn is not actually excluding anyone, because the
+// platform has no advisory-lock implementation (see lock_other.go). Callers
+// that care can warn; the point is that it is no longer indistinguishable from
+// a real lock.
+func (t *Txn) Degraded() bool { return t != nil && !lockingSupported }
+
 // lockPath is a dedicated file rather than one of the data files, so that
 // locking is independent of the temp+rename dance that replaces those inodes.
 func lockPath() (string, error) {

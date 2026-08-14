@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest. Required for App Store submission because the app calls a
+  "required reason" API; upload validation checks for this file statically, so
+  its absence fails before a human ever sees the build.
+
+  Placement matters: on macOS the manifest goes in Contents/Resources, not next
+  to the executable. app/Makefile copies it there.
+
+  The declarations here are deliberately minimal and each one is true today:
+
+  - UserDefaults (CA92.1) — AppState persists this app's own settings (refresh
+    interval, icon mode, launch-at-login, pinned-widget visibility) and reads
+    back only what it wrote. That is exactly what CA92.1 covers.
+
+  - No tracking, no tracking domains, no collected data types. The dashboard
+    never leaves the machine: the app talks to the dish on the local network and
+    to nothing else. The Nominatim reverse geocoder that would have made this
+    untrue is compiled out of the bundled helper (see features_apphelper.go),
+    and buildDashboard carries no coordinates at all.
+
+  If a place-name feature is ever added back, NSPrivacyCollectedDataTypes must
+  gain a precise-location entry with a third-party-transfer disclosure, and the
+  listing needs a privacy-policy URL. Do not add it quietly.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

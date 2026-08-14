@@ -16,10 +16,10 @@ import (
 // often and the gap is skipped, not estimated — which is precisely why the
 // dashboard says "observed" and derives duration from Samples rather than from
 // wall-clock time.
-func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
+func integrateStats(s *dish.Status, h *dish.History, now int64) (*state.Stats, error) {
 	if h == nil || h.Current <= 0 || len(h.PopPingLatencyMs) == 0 {
 		st, _ := state.LoadStats()
-		return st
+		return st, nil
 	}
 
 	st, _ := state.LoadStats()
@@ -35,7 +35,7 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 	// A reboot (or an uptime regression without a bootcount bump) ends the
 	// epoch: the dish's counters restarted, so averaging across the boundary
 	// would blend two different link sessions.
-	reboot := st.Samples == 0 || st.Boots != boots || uptime < st.LastUptimeS
+	reboot := st.Samples == 0 || st.Boots != boots || state.IsRestart(uptime, st.LastUptimeS)
 
 	var n int64
 	if reboot {
@@ -70,7 +70,12 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 			closeOutage(st)
 		}
 		if n < 0 {
+			// Cursor went backwards without a reboot. Resync and fold nothing —
+			// integrateEnergy's `delta < 0` branch does the same thing, and the
+			// two staying symmetric here is what keeps state.json and stats.json
+			// describing the same window.
 			n = 0
+			closeOutage(st)
 		}
 	}
 
@@ -78,9 +83,6 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 		st.ObsStartTs = now
 	}
 
-	if n > ringLen {
-		n = ringLen
-	}
 	accumulate(st, h, cur, n)
 
 	st.Version = state.StatsVersion
@@ -88,8 +90,7 @@ func integrateStats(s *dish.Status, h *dish.History, now int64) *state.Stats {
 	st.LastUptimeS = uptime
 	st.LastCurrent = cur
 	st.LastTs = now
-	_ = state.SaveStats(st)
-	return st
+	return st, state.SaveStats(st)
 }
 
 // closeOutage ends an outage run in progress, banking it into the count and

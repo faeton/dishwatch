@@ -17,9 +17,16 @@ import (
 )
 
 const (
-	userAgent = "sl-cli/1.0"
+	// Nominatim's usage policy requires a User-Agent that identifies the
+	// application *and* carries contact information; a bare tool name is the
+	// documented reason clients get blocked. This was "sl-cli/1.0".
+	userAgent = "dishwatch/1.0 (+https://github.com/faeton/dishwatch)"
 	timeout   = 3 * time.Second
-	endpoint  = "https://nominatim.openstreetmap.org/reverse"
+	// unknownLabel is cached like any other result, but only for negativeTTL —
+	// see Reverse.
+	unknownLabel = "unknown"
+	negativeTTL  = 6 * time.Hour
+	endpoint     = "https://nominatim.openstreetmap.org/reverse"
 )
 
 // Reverse returns a "Town, Region, Country" label for (lat, lon). On miss it
@@ -30,8 +37,20 @@ func Reverse(ctx context.Context, lat, lon float64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A cached failure expires; a cached place name does not. Coordinates do
+	// not move, so a real label is good forever — but "unknown" used to be
+	// written with the same permanence, so one transient DNS failure, one 429,
+	// or one captive portal poisoned that cell for good and the Place line
+	// silently fell back to a country code with no retry, ever.
 	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
-		return string(b), nil
+		label := string(b)
+		if label != unknownLabel {
+			return label, nil
+		}
+		if fi, err := os.Stat(cache); err == nil && time.Since(fi.ModTime()) < negativeTTL {
+			return label, nil
+		}
+		// Stale negative entry — fall through and try again.
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -46,19 +65,19 @@ func Reverse(ctx context.Context, lat, lon float64) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		_ = os.WriteFile(cache, []byte("unknown"), 0o644)
-		return "unknown", nil
+		_ = os.WriteFile(cache, []byte(unknownLabel), 0o644)
+		return unknownLabel, nil
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
-		return "unknown", nil
+		return unknownLabel, nil
 	}
 
 	label := parseNominatim(body)
 	if label == "" {
-		label = "unknown"
+		label = unknownLabel
 	}
 	_ = os.WriteFile(cache, []byte(label), 0o644)
 	return label, nil

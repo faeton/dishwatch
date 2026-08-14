@@ -31,12 +31,21 @@ struct DishWatchApp: App {
 /// optional always-on-top pinned widget window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Everything below is development scaffolding and is compiled out of a
+        // release build. It had no guard at all, which mattered more than it
+        // sounds: `Render` pulls in the whole icon-candidate harness,
+        // `NetProbe` opens raw BSD sockets and writes to a path taken from an
+        // environment variable, and DISHWATCH_PROBE starts a *second*
+        // HelperProvider alongside the app's own — two helpers contending the
+        // same lock. All three were reachable by setting an env var on the
+        // signed, sandboxed bundle.
+        #if DEBUG
         if Render.runIfRequested() || NetProbe.runIfRequested() {
             NSApp.terminate(nil)
             return
         }
-        // DISHWATCH_PROBE=1 → poll the live provider once, print, exit. Verifies
-        // the real `dishwatch json` decodes into DishData end-to-end.
+        // DISHWATCH_PROBE=1 → poll once, print, exit. Verifies that the real
+        // helper decodes into DishData end-to-end.
         if ProcessInfo.processInfo.environment["DISHWATCH_PROBE"] != nil {
             Task { @MainActor in
                 do {
@@ -56,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        #endif
         NSApp.setActivationPolicy(.accessory)
     }
 }

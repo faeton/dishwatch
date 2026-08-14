@@ -11,10 +11,26 @@ import (
 	"github.com/faeton/dishwatch/internal/state"
 )
 
+// DashboardSchemaVersion is the version of the JSON contract below. Keep it in
+// step with `DishData.expectedSchema` in
+// app/Sources/DishWatch/Model/DishData.swift; scripts/check-contract.sh fails
+// the build if the two drift, along with any key that exists on one side only.
+const DashboardSchemaVersion = 1
+
 // Dashboard is the JSON contract consumed by the macOS app's `LiveProvider`.
 // Field names (and JSON tags) match the Swift `DishData` struct 1:1 so the app
 // can decode it directly. See app/Sources/DishWatch/Model/DishData.swift.
 type Dashboard struct {
+	// SchemaVersion is bumped whenever a field this DTO already emits changes
+	// meaning, type or name. Adding a field does not bump it — the Swift side
+	// ignores unknown keys by design, so additions are compatible.
+	//
+	// The helper's `protocol` number versions the *envelope* (id/ok/data/error)
+	// and says nothing about the payload, so a Dashboard field rename used to
+	// need no bump anywhere and raised nothing on either side. `dishwatch json`
+	// has no envelope at all, which is the other reason this belongs here.
+	SchemaVersion int `json:"schemaVersion"`
+
 	State             string    `json:"state"`
 	SignalScore       int       `json:"signalScore"`
 	UptimeHours       float64   `json:"uptimeHours"`
@@ -100,8 +116,7 @@ func runJSON(ctx context.Context) error {
 		_ = state.MarkUnreachable(addr)
 		return emit(offlineDashboard(addr))
 	}
-	loc, _ := c.GetLocation(ctx)
-	return emit(buildDashboard(s, h, loc, addr))
+	return emit(buildDashboard(s, h, addr))
 }
 
 func emit(d Dashboard) error {
@@ -111,7 +126,7 @@ func emit(d Dashboard) error {
 }
 
 func offlineDashboard(addr string) Dashboard {
-	d := Dashboard{State: "Offline", DishAddr: addr}
+	d := Dashboard{SchemaVersion: DashboardSchemaVersion, State: "Offline", DishAddr: addr}
 	if snap, _ := state.Load(); snap != nil {
 		d.Boots = snap.Boots
 		d.UptimeHours = float64(snap.UptimeS) / 3600
@@ -122,8 +137,17 @@ func offlineDashboard(addr string) Dashboard {
 	return d
 }
 
-func buildDashboard(s *dish.Status, h *dish.History, loc *dish.Location, addr string) Dashboard {
+// buildDashboard maps a status + history pair into the DTO the app decodes.
+//
+// It deliberately takes no location. It used to accept a *dish.Location that it
+// never referenced, so both callers paid a full get_location round trip per
+// poll — roughly a third of the poll's dish time — to fill a parameter that was
+// discarded. Go does not warn on unused parameters and vet does not catch it.
+// Adding coordinates back here would also reopen the privacy-label question the
+// roadmap describes, since nothing in this DTO leaves the machine today.
+func buildDashboard(s *dish.Status, h *dish.History, addr string) Dashboard {
 	d := Dashboard{
+		SchemaVersion: DashboardSchemaVersion,
 		State:         swiftState(derivedState(s)),
 		SignalScore:   signalScore(s),
 		UptimeHours:   float64(s.DeviceState.UptimeS) / 3600,
@@ -220,12 +244,11 @@ func fillBank(d *Dashboard, snap *state.Snapshot) {
 	d.BankWhLeft = round1(whLeft)
 
 	now := time.Now().Unix()
-	obsDur := now - snap.ObsStartTs
-	if obsDur < 1 {
-		obsDur = 1
-	}
-	avgW := snap.EnergyWh * 3600 / float64(obsDur)
-	if avgW > 0 {
+	// Observed samples, not wall clock — see Snapshot.ObservedAvgW. Getting
+	// this wrong inflated time-to-empty by the ratio of elapsed time to
+	// measured time, which on the power-bank use case is the single most
+	// damaging number in the product.
+	if avgW, ok := snap.ObservedAvgW(); ok && avgW > 0 {
 		d.BankSecondsLeft = int(whLeft * 3600 / avgW)
 	}
 	d.AnchoredAgoText = state.HumanDur(now-a.TS) + " ago"

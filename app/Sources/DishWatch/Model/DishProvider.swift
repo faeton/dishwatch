@@ -10,8 +10,28 @@ protocol DishProvider: Sendable {
     func poll() async throws -> DishData
 }
 
-/// Deterministic sample data matching DishWatch.dc.html, with light per-tick
-/// jitter so sparklines/clock feel alive in a demo.
+/// Used when a release build cannot find its embedded helper — which should be
+/// impossible, since `app/Makefile` refuses to assemble a bundle without one.
+///
+/// It exists so that "impossible" degrades into a visible, accurate error rather
+/// than into `SampleProvider`, whose animated 142.5 Mbps is indistinguishable
+/// from a working dish. Failing loudly on a packaging mistake is worth more than
+/// a dashboard that looks fine and is fiction.
+struct MissingHelperProvider: DishProvider {
+    struct Missing: LocalizedError {
+        var errorDescription: String? {
+            "DishWatch could not find its helper. The app bundle looks incomplete — reinstalling should fix it."
+        }
+    }
+    func poll() async throws -> DishData { throw Missing() }
+}
+
+/// Deterministic sample data matching the design mock-up, with light per-tick
+/// jitter so sparklines feel alive in a demo.
+///
+/// Development only — `AppState` never selects it in a release build. Its
+/// numbers are the design's, not the dish's, and they animate; anything that
+/// renders them must say so.
 final class SampleProvider: DishProvider, @unchecked Sendable {
     private let base = DishData.sample
     private var tick = 0

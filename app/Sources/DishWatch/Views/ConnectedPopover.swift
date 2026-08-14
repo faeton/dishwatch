@@ -11,11 +11,23 @@ struct ConnectedPopover: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            hero
-            Divider().background(DW.hairline).padding(.horizontal, 16)
-            metricGrid.padding(.top, 14).padding(.horizontal, 16)
-            sparklines.padding(.top, 4)
-            detailRow.padding(.horizontal, 16).padding(.top, 6)
+            Group {
+                hero
+                Divider().background(DW.hairline).padding(.horizontal, 16)
+                metricGrid.padding(.top, 14).padding(.horizontal, 16)
+                sparklines.padding(.top, 4)
+                observedFooter
+                detailRow.padding(.horizontal, 16).padding(.top, 6)
+            }
+            // Frozen numbers should look frozen. On a failed poll the previous
+            // snapshot stays on screen at full fidelity, which is useful — but
+            // only if it is visibly not current. The footer's small "stale" text
+            // was carrying that entire message on its own.
+            .opacity(store.quality.isTrustworthy ? 1 : 0.5)
+            .saturation(store.quality.isTrustworthy ? 1 : 0)
+            .animation(.easeOut(duration: 0.2), value: store.quality.isTrustworthy)
+
+            actionBanner
             footer
         }
         .foregroundStyle(DW.text)
@@ -25,6 +37,45 @@ struct ConnectedPopover: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The dish will drop the connection for ~1–2 minutes.")
+        }
+    }
+
+    /// Outcome of the last command. Lives outside `lastError` because that is
+    /// cleared by the next successful poll, which meant a failed reboot was
+    /// visible for well under a second — after the user had confirmed a
+    /// destructive action and was owed an answer.
+    @ViewBuilder private var actionBanner: some View {
+        // A poll can succeed while the accumulators failed to persist. The dish
+        // numbers are current; the Energy and Observed figures beside them are
+        // not. The helper reports it, AppState stores it, and until now nothing
+        // rendered it — which made a full or read-only container silent.
+        if let w = store.warning {
+            Text(w)
+                .font(.system(size: 11))
+                .foregroundStyle(DW.amber.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.top, 8)
+        }
+        if let msg = store.actionResult {
+            HStack(spacing: 8) {
+                Text(msg)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DW.text.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button {
+                    store.actionResult = nil
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DW.textA(0.6))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+            .padding(.horizontal, 16).padding(.top, 10)
         }
     }
 
@@ -87,17 +138,77 @@ struct ConnectedPopover: View {
         VStack(alignment: .leading, spacing: 11) {
             SectionLabel(text: "Last 60 s").tracking(0.8)
             sparkRow("Ping", d.pingSeries, DW.cyan, "avg \(Int(d.pingAvg)) ms")
-            sparkRow("Down", d.downSeries, DW.down, "max \(Int(d.downMax))")
+            // No trailing figure on Down. It used to read `max <n>`, a
+            // 60-second maximum presented as a peak — the defect docs/macos-ui.md
+            // opens with. The sparkline already shows the shape, and the
+            // Observed footer below carries a peak that means something.
+            sparkRow("Down", d.downSeries, DW.down, nil)
             sparkRow("Power", d.powerSeries, DW.amber, "avg \(String(format: "%.1f", d.powerAvg)) W")
         }
         .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 6)
     }
 
-    private func sparkRow(_ name: String, _ series: [Double], _ color: Color, _ trailing: String) -> some View {
+    /// The Observed block — long-window link quality for the current dish boot.
+    ///
+    /// Absent entirely until now: `DishData.observed` was decoded strictly,
+    /// covered by tests, and read by no view, so every honesty guarantee behind
+    /// the word "Observed" was guarding something that never rendered.
+    ///
+    /// `observed == nil` hides the row. That is the whole cold-start rule —
+    /// under 120 samples the CLI emits zeros across the block, and zeros here
+    /// would be statistics nobody measured.
+    @ViewBuilder private var observedFooter: some View {
+        if let o = d.observed {
+            VStack(alignment: .leading, spacing: 5) {
+                SectionLabel(text: "Observed \(Self.dur(o.seconds))").tracking(0.8)
+                Text(observedLine(o))
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(DW.textA(0.7))
+                if o.outages > 0 {
+                    Text("\(o.outages) outage\(o.outages == 1 ? "" : "s") · \(Self.dur(o.outageSeconds)) dark · longest \(Self.dur(o.longestOutage))")
+                        .font(.system(size: 11)).monospacedDigit()
+                        .foregroundStyle(DW.amber.opacity(0.85))
+                }
+                Text("\(Self.bytes(o.downBytes)) ↓ · \(Self.bytes(o.upBytes)) ↑")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(DW.textA(0.45))
+            }
+            .padding(.horizontal, 16).padding(.top, 12)
+            // Load-bearing, per docs/macos-ui.md: "Observed" is a claim about
+            // sample provenance, not about the app having been open, and
+            // ordinary English hears the second one. Someone who quits for ten
+            // minutes and comes back to "Observed 2h 14m" needs this reachable.
+            .help("Covers seconds the dish recorded and DishWatch retrieved, including up to 15 min of catch-up after a gap. Longer gaps are excluded entirely.")
+        }
+    }
+
+    private func observedLine(_ o: ObservedStats) -> String {
+        "ping \(Int(o.pingAvg)) · \(Int(o.cleanPct))% clean · peak ↓\(Int(o.downPeak)) ↑\(Int(o.upPeak)) · \(String(format: "%.1f", o.powerAvg)) W"
+    }
+
+    /// Matches the CLI's `HumanDur` so the two surfaces read the same.
+    static func dur(_ s: Int64) -> String {
+        if s < 60 { return "\(s)s" }
+        let m = s / 60, h = m / 60, d = h / 24
+        if m < 60 { return "\(m)m" }
+        if h < 24 { return h > 0 && m % 60 > 0 ? "\(h)h \(m % 60)m" : "\(h)h" }
+        return d > 0 && h % 24 > 0 ? "\(d)d \(h % 24)h" : "\(d)d"
+    }
+
+    static func bytes(_ b: Double) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB"]
+        var v = b, i = 0
+        while v >= 1024, i < units.count - 1 { v /= 1024; i += 1 }
+        return i <= 1 ? "\(Int(v)) \(units[i])" : String(format: "%.1f %@", v, units[i])
+    }
+
+    private func sparkRow(_ name: String, _ series: [Double], _ color: Color, _ trailing: String?) -> some View {
         HStack(spacing: 12) {
             Text(name).font(.system(size: 11)).foregroundStyle(DW.textA(0.55)).frame(width: 42, alignment: .leading)
             Spark(values: series, color: color).frame(height: 24)
-            Text(trailing).font(.system(size: 11)).monospacedDigit()
+            // Keeps the fixed width even when there is no trailing figure, so
+            // dropping one row's label does not shift the sparklines above it.
+            Text(trailing ?? "").font(.system(size: 11)).monospacedDigit()
                 .foregroundStyle(DW.textA(0.45)).frame(width: 60, alignment: .trailing)
         }
     }
@@ -160,23 +271,26 @@ struct ConnectedPopover: View {
     }
 
     private var footer: some View {
-        // Sample mode has to say so here, not only in Settings. Without the CLI
-        // the app still renders a complete, plausible dashboard, and a footer
-        // reading "live" over mockup numbers is the same class of lie as a
-        // missing field decoding to a design constant.
+        // The status word comes from AppState.quality, which distinguishes
+        // "the transport call returned" from "the dish is up". Those were
+        // conflated, and because the helper reports an unreachable dish as a
+        // *successful* poll carrying an Offline dashboard, the result was a hero
+        // reading Offline directly above a footer reading live.
         let status: String
-        if !store.isLive {
-            status = "sample data — no dishwatch CLI found"
-        } else if !store.hasLoaded {
-            status = "connecting…"
-        } else {
-            status = store.lastError == nil ? "live" : "stale"
+        switch store.quality {
+        case .sample:            status = "sample data — not a real dish"
+        case .brokenInstall:     status = "helper missing — reinstall DishWatch"
+        case .loading:           status = "connecting…"
+        case .live:              status = "live"
+        case .disabled:          status = "service disabled"
+        case .offline:           status = "no dish at this address"
+        case .stale:
+            status = store.lastGoodAgoText.map { "stale — last reading \($0)" } ?? "stale"
         }
-        let live = store.isLive && store.lastError == nil && store.hasLoaded
         return HStack {
             Text("\(d.dishAddr) · \(status)")
                 .font(.system(size: 11)).monospacedDigit()
-                .foregroundStyle(live ? DW.textA(0.38) : DW.amber.opacity(0.8))
+                .foregroundStyle(store.quality.isTrustworthy ? DW.textA(0.38) : DW.amber.opacity(0.8))
             Spacer()
             HStack(spacing: 7) {
                 DWButton(title: "Reboot") { confirmReboot = true }

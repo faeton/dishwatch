@@ -14,6 +14,9 @@ const (
 	lockShared    lockMode = syscall.LOCK_SH
 )
 
+// lockingSupported reports whether lockFile actually locks. See lock_other.go.
+const lockingSupported = true
+
 func lockFile(f *os.File, mode lockMode) error {
 	return syscall.Flock(int(f.Fd()), int(mode))
 }

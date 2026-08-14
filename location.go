@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-
-	"github.com/faeton/dishwatch/internal/geo"
 )
 
 func runLocation(ctx context.Context) error {
@@ -23,7 +21,7 @@ func runLocation(ctx context.Context) error {
 		return nil
 	}
 	fmt.Printf("lat=%.6f  lon=%.6f  alt=%.0fm\n", loc.LLA.Lat, loc.LLA.Lon, loc.LLA.Alt)
-	place, _ := geo.Reverse(ctx, loc.LLA.Lat, loc.LLA.Lon)
+	place, _ := reverseGeocode(ctx, loc.LLA.Lat, loc.LLA.Lon)
 	if place != "" && place != "unknown" {
 		fmt.Println("place:", place)
 	}

@@ -13,16 +13,89 @@ struct MenuBarLabel: View {
     @ObservedObject var store: AppState
 
     var body: some View {
-        let d = store.data
-        Image(nsImage: Self.render(store: store))
+        Image(nsImage: Self.cachedRender(store: store))
             .renderingMode(.template)
-            .help("\(d.stateLabel) · \(Int(d.pingMs)) ms · \(Int(d.downMbps))↓ Mbps · sig \(d.signalScore)")
+            .help(tooltip)
+    }
+
+    /// The tooltip has to carry the staleness, because the glyph cannot. This is
+    /// the app's primary surface and it was the only one with no honesty gate:
+    /// on a failed poll it kept displaying the last signal score and ping
+    /// indefinitely, reading "Offline · 18 ms · 4↓ Mbps · sig 78" — an offline
+    /// state quoting live-looking numbers of unbounded age.
+    private var tooltip: String {
+        let d = store.data
+        switch store.quality {
+        case .loading:
+            return "DishWatch — connecting…"
+        case .sample:
+            return "DishWatch — sample data, not a real dish"
+        case .brokenInstall(let why):
+            return "DishWatch — \(why)"
+        case .disabled:
+            return "DishWatch — the dish reports service disabled"
+        case .offline:
+            return "DishWatch — no dish found at \(d.dishAddr)"
+        case .stale:
+            let age = store.lastGoodAgoText.map { " (\($0))" } ?? ""
+            return "DishWatch — not responding. Last reading\(age): \(Int(d.pingMs)) ms · sig \(d.signalScore)"
+        case .live:
+            return "\(d.stateLabel) · \(Int(d.pingMs)) ms · \(Int(d.downMbps))↓ Mbps · sig \(d.signalScore)"
+        }
+    }
+
+    /// Everything the glyph is actually a function of. The icon has ~5 inputs
+    /// while `AppState` publishes ~40 fields, so without this the menu bar
+    /// re-rasterized a SwiftUI view on the main actor on *every* poll —
+    /// once a second, forever, whether or not anything visible had moved. That
+    /// was the app's dominant idle cost.
+    private struct GlyphKey: Equatable {
+        let mode: IconMode
+        let showValue: Bool
+        let onBattery: Bool
+        let bankPct: Int
+        let headline: String
+        let signalBucket: Int
+        let scale: CGFloat
+    }
+
+    @MainActor private static var cacheKey: GlyphKey?
+    @MainActor private static var cacheImage: NSImage?
+
+    @MainActor
+    static func cachedRender(store: AppState) -> NSImage {
+        let d = store.data
+        let key = GlyphKey(
+            mode: store.iconMode,
+            showValue: store.showValueNextToIcon,
+            onBattery: d.onBattery,
+            bankPct: Int(d.bankPct),
+            headline: store.headlineValue,
+            // The arc is drawn in fifths; sub-bucket changes are invisible.
+            signalBucket: d.signalScore / 5,
+            scale: backingScale()
+        )
+        if key == cacheKey, let img = cacheImage { return img }
+        let img = render(store: store)
+        cacheKey = key
+        cacheImage = img
+        return img
+    }
+
+    /// `NSScreen.main` is the screen holding the key window, and an `.accessory`
+    /// app usually has none — so it returned nil or the wrong display on a
+    /// multi-monitor setup and the icon rasterized at the wrong scale. Take the
+    /// sharpest attached display instead; over-rendering is free here, and a
+    /// soft menu-bar icon is the one artefact everybody notices.
+    @MainActor
+    private static func backingScale() -> CGFloat {
+        NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
     }
 
     @MainActor
     static func render(store: AppState) -> NSImage {
         let renderer = ImageRenderer(content: MenuBarIconContent(store: store))
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        renderer.scale = backingScale()
         let img = renderer.nsImage ?? NSImage()
         img.isTemplate = true   // adopt the menu bar's tint, both appearances
         return img

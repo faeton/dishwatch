@@ -51,16 +51,28 @@ final class AppState: ObservableObject {
             // works in a sandboxed bundle, and the one the Store build ships.
             self.provider = HelperProvider()
             self.isLive = true
-        } else if LiveProvider.locateBinary() != nil {
-            // Legacy spawn-per-poll bridge, unsandboxed development only. Dies
-            // under the sandbox (it hunts for a CLI outside the bundle) and
-            // pays ~700ms per poll; kept so an unbundled `swift run` against a
-            // Homebrew install still shows live data.
-            self.provider = LiveProvider()
-            self.isLive = true
         } else {
-            self.provider = SampleProvider()
+            // Release builds stop here: a shipped bundle always contains its
+            // helper (app/Makefile fails the build otherwise), so reaching this
+            // branch means something is wrong and the honest thing is to say so
+            // rather than quietly substitute a fabricated dashboard.
+            //
+            // LiveProvider and SampleProvider are development-only. The former
+            // is the legacy spawn-per-poll bridge that cannot work sandboxed;
+            // the latter animates the design mock-up convincingly enough that
+            // it must never be reachable in a build a user could install.
+            #if DEBUG
+            if LiveProvider.locateBinary() != nil {
+                self.provider = LiveProvider()
+                self.isLive = true
+            } else {
+                self.provider = SampleProvider()
+                self.isLive = false
+            }
+            #else
+            self.provider = MissingHelperProvider()
             self.isLive = false
+            #endif
         }
         self.iconMode = IconMode(rawValue: defaults.string(forKey: "iconMode") ?? "") ?? .signalBars
         self.showValueNextToIcon = defaults.object(forKey: "showValue") as? Bool ?? true
@@ -87,33 +99,149 @@ final class AppState: ObservableObject {
     /// For the headless render path only: present sample data as if loaded.
     func seedSample() { data = .sample; hasLoaded = true }
 
-    func refresh() async {
+    func refresh() async { await refresh(generation: nil) }
+
+    private func refresh(generation: Int?) async {
         do {
             var d = try await provider.poll()
+            // Drop a result from a superseded poll loop rather than letting it
+            // overwrite whatever the current one has already published.
+            if let generation, generation != pollGeneration { return }
             if simulateBattery { d.onBattery = true; d.bankAnchored = true }
-            data = d
+            // Only publish a genuine change. An unconditional assignment fires
+            // objectWillChange every tick regardless, which re-renders the whole
+            // popover tree and the menu-bar glyph for nothing.
+            if d != data { data = d }
             lastError = nil
+            lastGoodAt = Date()
+            // A poll can succeed while something behind it failed — the dish
+            // answered but the accumulators could not be written, say. That is
+            // not an error, but it must not be silent either: the energy and
+            // Observed figures on screen are then older than everything beside
+            // them.
+            warning = (provider as? HelperProvider)?.lastWarning
         } catch {
-            // keep the last good snapshot but mark it offline + stale
+            if let generation, generation != pollGeneration { return }
+            // Keep the last good snapshot but mark it offline + stale. The
+            // numbers stay on screen because a frozen reading is more useful
+            // than a blank one — provided the UI says it is frozen, which is
+            // what `quality` below exists to make unambiguous.
             var d = data
             d.state = .offline
-            data = d
+            if d != data { data = d }
             lastError = error.localizedDescription
         }
-        hasLoaded = true
+        if !hasLoaded { hasLoaded = true }
     }
 
-    /// Reboot the dish (live only). Triggers an immediate poll afterwards so
-    /// the UI reflects the drop. No-op on sample data.
-    func reboot() async {
-        do {
-            switch provider {
-            case let h as HelperProvider: try await h.reboot()
-            case let l as LiveProvider:   try await l.reboot()
-            default: return
+    /// When the last successful poll landed, for the staleness readout.
+    @Published private(set) var lastGoodAt: Date?
+    /// Non-fatal problem reported alongside a good poll.
+    @Published private(set) var warning: String?
+
+    /// How much the numbers on screen can be trusted right now.
+    ///
+    /// This exists because "live" used to mean nothing more than "the transport
+    /// call returned". The helper deliberately converts an unreachable dish into
+    /// a *successful* poll carrying an Offline dashboard, so a reviewer with no
+    /// dish saw a hero reading **Offline** directly above a footer reading
+    /// **live**, over metrics restored from a persisted snapshot of arbitrary
+    /// age. Transport success and link state are two different questions and
+    /// the UI has to answer both.
+    enum Quality {
+        case loading         // no poll has completed yet
+        case live            // fresh poll, dish reachable and reporting
+        case disabled        // fresh poll, dish present but service disabled
+        case offline         // fresh poll, nothing answering at the address
+        case stale(String)   // poll failed; showing the last good snapshot
+        case sample          // fabricated data, development builds only
+        case brokenInstall(String)  // the helper is missing or unusable
+
+        /// Whether the numbers on screen are current. `disabled` counts: the
+        /// dish answered and told us it is disabled, which is a real reading.
+        var isTrustworthy: Bool {
+            switch self {
+            case .live, .disabled: return true
+            default:               return false
             }
+        }
+    }
+
+    var quality: Quality {
+        // A release build with no helper is a broken install, not a demo. This
+        // used to fall through to `.sample`, which labelled a packaging failure
+        // "sample data — not a real dish" and told the user nothing actionable.
+        if provider is MissingHelperProvider {
+            return .brokenInstall(lastError ?? "the app bundle looks incomplete")
+        }
+        if !isLive { return .sample }
+        if let e = lastError { return .stale(e) }
+        if !hasLoaded { return .loading }
+        switch data.state {
+        // `.weak` is a *connected* dish with a poor link — searching, booting,
+        // obstructed. Collapsing it into "no dish at this address" was worse
+        // than the bug this enum replaced: it took a live, correct reading and
+        // captioned it as an absent dish. `swiftState` maps every non-connected,
+        // non-disabled dish state to Weak, so this is the common case whenever
+        // the link is anything but perfect.
+        case .connected, .weak: return .live
+        case .disabled:         return .disabled
+        case .offline:          return .offline
+        }
+    }
+
+    /// "12s ago" for the staleness readout, or nil when there is nothing to age.
+    var lastGoodAgoText: String? {
+        guard let t = lastGoodAt else { return nil }
+        let s = Int(Date().timeIntervalSince(t))
+        if s < 2 { return "just now" }
+        if s < 60 { return "\(s)s ago" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        return "\(s / 3600)h ago"
+    }
+
+    /// Result of a user-initiated command, surfaced in the UI until dismissed
+    /// or superseded. `lastError` is unsuitable: the next successful poll
+    /// clears it, so a failed reboot used to vanish within a second.
+    @Published var actionResult: String?
+
+    /// Reboot the dish. Triggers an immediate poll afterwards so the UI
+    /// reflects the drop.
+    ///
+    /// The failure path used to be unreachable. `HelperProvider.reboot` swallowed
+    /// its own error with `try?`, so this `catch` never ran and a reboot that
+    /// did not happen was indistinguishable from one that did — after the user
+    /// had confirmed a destructive action. Both halves are fixed: the provider
+    /// throws, and the outcome is reported somewhere that outlives one poll.
+    func reboot() async {
+        guard let h = provider as? HelperProvider else {
+            actionResult = "Reboot needs a live dish connection."
+            return
+        }
+        do {
+            try await h.reboot()
+            actionResult = "Reboot sent. The dish will drop for 1–2 minutes."
         } catch {
-            lastError = error.localizedDescription
+            actionResult = "Reboot failed: \(error.localizedDescription)"
+        }
+        await refresh()
+    }
+
+    /// Anchor the power bank. Maps to `sl pb <pct> [wh]`.
+    ///
+    /// Nothing called the provider's setAnchor at all — the battery sheet's
+    /// buttons were inert — so this is the wire that was missing.
+    func setBankAnchor(pct: Double, wh: Double?) async {
+        guard let h = provider as? HelperProvider else {
+            actionResult = "Battery tracking needs a live dish connection."
+            return
+        }
+        do {
+            try await h.setAnchor(pct: pct, wh: wh)
+            actionResult = wh.map { "Bank anchored at \(Int(pct))% · \(Int($0)) Wh" }
+                ?? "Bank anchored at \(Int(pct))%"
+        } catch {
+            actionResult = "Could not set the anchor: \(error.localizedDescription)"
         }
         await refresh()
     }
@@ -142,12 +270,22 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Bumped on every restart. `cancel()` does not stop an in-flight
+    /// `provider.poll()`, so without a generation tag the old loop's result
+    /// could land *after* the new loop's and overwrite fresher data with older
+    /// — silently, since both writes are on the main actor and neither errors.
+    /// Changing the refresh interval a few times was enough to trigger it.
+    private var pollGeneration = 0
+
     private func restartPolling() {
         pollTask?.cancel()
+        pollGeneration &+= 1
+        let generation = pollGeneration
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.refresh()
+                guard self.pollGeneration == generation else { return }
+                await self.refresh(generation: generation)
                 let secs = self.refreshInterval
                 try? await Task.sleep(for: .seconds(max(1, secs)))
             }

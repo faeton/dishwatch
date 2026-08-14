@@ -28,13 +28,13 @@ func TestIntegrateStatsBootstrapsThenIncrements(t *testing.T) {
 
 	// First observation with no prior samples: bootstrap from the ring, bounded
 	// by uptime so a freshly-booted dish cannot claim a full ring of history.
-	st := integrateStats(statusAt(1, 300), fullRing(500), 1_700_000_000)
+	st, _ := integrateStats(statusAt(1, 300), fullRing(500), 1_700_000_000)
 	if st.Samples != 300 {
 		t.Fatalf("bootstrap Samples = %d, want 300 (clamped by uptime)", st.Samples)
 	}
 
 	// Steady state: only the delta since the stored cursor is new.
-	st = integrateStats(statusAt(1, 360), fullRing(560), 1_700_000_060)
+	st, _ = integrateStats(statusAt(1, 360), fullRing(560), 1_700_000_060)
 	if st.Samples != 360 {
 		t.Fatalf("incremental Samples = %d, want 360 (+60)", st.Samples)
 	}
@@ -47,11 +47,11 @@ func TestIntegrateStatsResetsOnReboot(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
-	integrateStats(statusAt(1, 800), fullRing(800), 1_700_000_000)
+	_, _ = integrateStats(statusAt(1, 800), fullRing(800), 1_700_000_000)
 
 	// Bootcount bump: the dish's counters restarted, so blending across the
 	// boundary would average two different link sessions together.
-	st := integrateStats(statusAt(2, 50), fullRing(50), 1_700_000_100)
+	st, _ := integrateStats(statusAt(2, 50), fullRing(50), 1_700_000_100)
 	if st.Samples != 50 {
 		t.Errorf("Samples = %d, want 50 — the epoch must reset", st.Samples)
 	}
@@ -64,11 +64,11 @@ func TestIntegrateStatsResetsOnUptimeRegression(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
-	integrateStats(statusAt(1, 800), fullRing(800), 1_700_000_000)
+	_, _ = integrateStats(statusAt(1, 800), fullRing(800), 1_700_000_000)
 
 	// Uptime went backwards without a bootcount bump — some firmware does not
 	// increment it. Still a reboot.
-	st := integrateStats(statusAt(1, 40), fullRing(40), 1_700_000_100)
+	st, _ := integrateStats(statusAt(1, 40), fullRing(40), 1_700_000_100)
 	if st.Samples != 40 {
 		t.Errorf("Samples = %d, want 40 — uptime regression must reset the epoch", st.Samples)
 	}
@@ -81,11 +81,11 @@ func TestIntegrateStatsGapWiderThanRingAddsNothing(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
-	st := integrateStats(statusAt(1, 500), fullRing(500), 1_700_000_000)
+	st, _ := integrateStats(statusAt(1, 500), fullRing(500), 1_700_000_000)
 	before := st.Samples
 
 	// Cursor jumps 5000 samples — far past the 900-sample ring.
-	st = integrateStats(statusAt(1, 5500), fullRing(5500), 1_700_005_000)
+	st, _ = integrateStats(statusAt(1, 5500), fullRing(5500), 1_700_005_000)
 
 	if st.Samples != before {
 		t.Errorf("Samples = %d, want %d — samples past the ring are unrecoverable", st.Samples, before)
@@ -110,13 +110,13 @@ func TestIntegrateStatsFoldsGapsInsideRing(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
-	st := integrateStats(statusAt(1, 100), fullRing(100), 1_700_000_000)
+	st, _ := integrateStats(statusAt(1, 100), fullRing(100), 1_700_000_000)
 	if st.Samples != 100 {
 		t.Fatalf("setup Samples = %d, want 100", st.Samples)
 	}
 
 	// The app is quit for 600 s. The dish kept sampling; we did not observe it.
-	st = integrateStats(statusAt(1, 700), fullRing(700), 1_700_000_600)
+	st, _ = integrateStats(statusAt(1, 700), fullRing(700), 1_700_000_600)
 
 	if st.Samples != 700 {
 		t.Errorf("Samples = %d, want 700 — the ring still held the whole gap", st.Samples)
@@ -137,7 +137,7 @@ func TestIntegrateStatsClosesOutageAcrossAGapWiderThanRing(t *testing.T) {
 	// A ring whose last samples are dark: the session ends mid-outage.
 	darkTail := ring(strings.Repeat("c", 895) + strings.Repeat("d", 5))
 	darkTail.Current = 900
-	st := integrateStats(statusAt(1, 900), darkTail, 1_700_000_000)
+	st, _ := integrateStats(statusAt(1, 900), darkTail, 1_700_000_000)
 	if st.CurrentOutageS != 5 {
 		t.Fatalf("setup CurrentOutageS = %d, want 5 — the run must be open", st.CurrentOutageS)
 	}
@@ -149,7 +149,7 @@ func TestIntegrateStatsClosesOutageAcrossAGapWiderThanRing(t *testing.T) {
 	// recoverable, so the run we were in ended at the last sample we saw.
 	darkHead := ring(strings.Repeat("d", 3) + strings.Repeat("c", 897))
 	darkHead.Current = 8100
-	st = integrateStats(statusAt(1, 8100), darkHead, 1_700_007_200)
+	st, _ = integrateStats(statusAt(1, 8100), darkHead, 1_700_007_200)
 
 	if st.OutageCount != 1 {
 		t.Errorf("OutageCount = %d, want 1 — the pre-gap run must be banked", st.OutageCount)
@@ -168,14 +168,14 @@ func TestIntegrateStatsWithoutHistoryIsInert(t *testing.T) {
 	state.SetDir(t.TempDir())
 	t.Cleanup(func() { state.SetDir("") })
 
-	st := integrateStats(statusAt(1, 200), fullRing(200), 1_700_000_000)
+	st, _ := integrateStats(statusAt(1, 200), fullRing(200), 1_700_000_000)
 	want := st.Samples
 
-	if got := integrateStats(statusAt(1, 210), nil, 1_700_000_010); got.Samples != want {
+	if got, _ := integrateStats(statusAt(1, 210), nil, 1_700_000_010); got.Samples != want {
 		t.Errorf("Samples = %d, want %d unchanged on nil history", got.Samples, want)
 	}
 	empty := fullRing(0) // zero cursor: the dish has reported nothing yet
-	if got := integrateStats(statusAt(1, 210), empty, 1_700_000_010); got.Samples != want {
+	if got, _ := integrateStats(statusAt(1, 210), empty, 1_700_000_010); got.Samples != want {
 		t.Errorf("Samples = %d, want %d unchanged on zero cursor", got.Samples, want)
 	}
 }

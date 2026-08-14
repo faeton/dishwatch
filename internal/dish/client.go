@@ -36,6 +36,9 @@ const (
 	methodName    = "Handle"
 	defaultDialMS = 2000
 	defaultCallMS = 4000
+	// Reflection is a separate round trip from the dial and needs its own
+	// bound; a connected-but-unresponsive dish otherwise stalls here forever.
+	defaultReflectMS = 3000
 )
 
 // Client is a reflection-backed gRPC client for the dish. Zero value is not
@@ -64,7 +67,22 @@ func New(ctx context.Context, addr string) (*Client, error) {
 		return nil, fmt.Errorf("%w at %s: %w", ErrUnreachable, addr, err)
 	}
 
-	rc := grpcreflect.NewClientAuto(ctx, conn)
+	// Reflection needs its own deadline. It used to run on the caller's context,
+	// which for the long-lived helper has none — so a dish that completed the
+	// TCP handshake and then stalled the reflection stream hung the helper
+	// before it could even announce itself, and the app sat on "Connecting…"
+	// with no way to recover. The dial timeout above never covered this.
+	refCtx, refCancel := context.WithTimeout(ctx, defaultReflectMS*time.Millisecond)
+	defer refCancel()
+
+	rc := grpcreflect.NewClientAuto(refCtx, conn)
+	// Close the reflection stream once the descriptors are resolved. Without
+	// this it stayed open for the life of the connection and cleanup fell to a
+	// finalizer, whose Reset() drains the stream — on an unresponsive dish that
+	// blocks the single finalizer goroutine, and with it every other finalizer
+	// in the process, including the ones that close file descriptors.
+	defer rc.Reset()
+
 	fd, err := rc.FileContainingSymbol(protoreflect.FullName(serviceName))
 	if err != nil {
 		conn.Close()

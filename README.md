@@ -28,8 +28,11 @@ event log, and power-bank anchor all stay consistent. The one exception is
 bash rebuilds `state.json` from scratch on every write, so a shared file would
 lose the Go-only fields the moment `sl` ran.
 
-Feature parity is 1:1 today. If they ever diverge, the Go version is canonical
-and the bash version will fall behind.
+Feature parity is 1:1 for everything the bash script implements. The Go build
+is a strict superset: `json` (a machine-readable snapshot) and `helper` (the
+long-lived engine the macOS app supervises) have no bash equivalent, and won't
+get one — they exist to serve the app, not a terminal. If the two ever diverge
+elsewhere, the Go version is canonical and the bash version will fall behind.
 
 ## Install
 
@@ -47,7 +50,7 @@ docs/examples below use `sl`). Make sure your Mac is on the Starlink network
 ```
 sl                    # one-shot status (plain text)
 sl dash | sl d        # pretty one-shot dashboard
-sl watch | sl w [s]   # live dashboard, press q to quit (default 5s refresh)
+sl watch | sl w [s]   # live dashboard, press q to quit (default 3s refresh)
 sl events [N]         # tail the event log (reboots, dropouts, state changes)
 sl speed              # LAN RTT to dish + macOS networkQuality internet test
 sl history            # 60s rolling means from the dish
@@ -56,6 +59,7 @@ sl map                # obstruction map summary
 sl reboot             # reboot the dish
 sl pb [pct [wh] | -]  # anchor power-bank % (and optional Wh); `-` clears; no args = show
 sl raw '<json>'       # send an arbitrary gRPC request
+sl json               # one snapshot as JSON (what the macOS app consumes)
 ```
 
 ### Watch mode
@@ -150,7 +154,10 @@ These are genuine dish/firmware limitations, not missing features:
 
 ## Files
 
-- `~/.cache/sl/state.json` — last successful snapshot (includes energy accumulator)
+- `~/.cache/sl/state.json` — last successful snapshot (includes the energy
+  accumulator and `obsSeconds`, the count of power samples actually integrated —
+  the denominator for the average, so that a gap the dish buffered past cannot
+  dilute it)
 - `~/.cache/sl/stats.json` — observed-sample accumulator behind the `Observed`
   section (Go only — bash rewrites `state.json` wholesale, so this lives apart)
 - `~/.cache/sl/pb.json` — power-bank anchor (if set via `sl pb <pct>`)

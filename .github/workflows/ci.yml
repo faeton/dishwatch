@@ -1,0 +1,113 @@
+name: CI
+
+# There was no CI at all. The release path is `make publish` from one laptop
+# with a `gh` session and no test gate, so a red tree could ship — and
+# lock_other.go, the degraded no-op locking path, was never compiled by anything
+# because `go test` only ever ran on the host platform.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l . | grep -v '^dist/' || true)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+
+      - run: go vet ./...
+      - run: go test -race ./...
+
+      # The build that actually ships inside the app bundle. It excludes the
+      # shell-outs, the arbitrary-RPC verb and the third-party geocoder, so it
+      # has a different compile graph and can break on its own.
+      - name: vet + test the apphelper build
+        run: |
+          go vet -tags apphelper ./...
+          go build -tags apphelper ./...
+          # Run the suite under the tag too. The stubs replace real functions,
+          # so a change can compile under both tags and still break one of them.
+          go test -tags apphelper ./...
+
+      # The only thing that ever exercises lock_other.go, whose lockFile is a
+      # no-op returning nil — every caller there believes it holds a transaction.
+      - name: cross-compile non-unix
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: the shipped helper carries no shell-outs or geocoder
+        run: |
+          go build -tags apphelper -o /tmp/helper .
+          for s in networkQuality nominatim.openstreetmap.org; do
+            if strings -a /tmp/helper | grep -q -F "$s"; then
+              echo "apphelper build still contains '$s'" >&2; exit 1
+            fi
+          done
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Diffs Go json tags against Swift CodingKeys. Catches a rename on the Go
+      # side, which the checked-in golden fixture structurally cannot.
+      - run: ./scripts/check-contract.sh
+
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: build (debug + release)
+        working-directory: app
+        run: |
+          swift build -c debug
+          swift build -c release
+      - name: test
+        working-directory: app
+        run: swift test
+
+      # An arm64-only release artifact does not degrade on an Intel Mac, it
+      # hard-fails — and it fails as "the application is damaged", which reads
+      # as a signing fault and sends you debugging the wrong thing.
+      - name: release binaries are universal
+        run: |
+          brew list go >/dev/null 2>&1 || true
+          make helper-universal
+          for b in bin/dishwatch-helper; do
+            archs="$(lipo -archs "$b")"
+            case "$archs" in
+              *x86_64*arm64*|*arm64*x86_64*) echo "  $b: $archs" ;;
+              *) echo "$b is not universal: $archs" >&2; exit 1 ;;
+            esac
+          done
+          cd app && swift build -c release --arch arm64 --arch x86_64
+          archs="$(lipo -archs .build/apple/Products/Release/DishWatch)"
+          case "$archs" in
+            *x86_64*arm64*|*arm64*x86_64*) echo "  DishWatch: $archs" ;;
+            *) echo "DishWatch is not universal: $archs" >&2; exit 1 ;;
+          esac
+
+      # The guards that keep development scaffolding out of a shipped app are
+      # only real if the shipped build is a release build — `make app` used to
+      # build `-c debug`, which made every one of them inert.
+      - name: release build contains no dev hooks
+        working-directory: app
+        run: |
+          bin=.build/release/DishWatch
+          for s in DISHWATCH_BIN DISHWATCH_NETPROBE DISHWATCH_APPICON DISHWATCH_PROBE Sites/dishwatch; do
+            if strings -a "$bin" | grep -q -F "$s"; then
+              echo "release binary contains dev hook '$s'" >&2; exit 1
+            fi
+          done

@@ -1,3 +1,11 @@
+#if DEBUG
+// Development scaffolding: excluded from release builds.
+//
+// This file is a build-time / diagnostic tool, not a feature. It used to be
+// compiled into the shipped bundle because app/Makefile built `-c debug`, which
+// made every guard like this one inert. See docs/roadmap.md "Cut before
+// submission".
+
 import SwiftUI
 import AppKit
 
@@ -19,9 +27,9 @@ enum Render {
         var battery = DishData.sample; battery.onBattery = true; battery.bankAnchored = true
 
         snap(ConnectedPopover(d: store.data, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
-        snap(BatteryPopover(d: battery, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
-        snap(CompactWidget(d: .sample), dir, "compact")
-        snap(BatterySetupSheet(d: .sample), dir, "setup")
+        snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
+        snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
+        snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")
         snap(SettingsView().environmentObject(store), dir, "settings")
 
         // Menu-bar glyphs: render each icon mode as the black-ink silhouette the
@@ -134,3 +142,5 @@ enum Render {
         FileHandle.standardError.write(Data("wrote \(url.path)\n".utf8))
     }
 }
+
+#endif

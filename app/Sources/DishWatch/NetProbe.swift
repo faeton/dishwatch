@@ -1,3 +1,11 @@
+#if DEBUG
+// Development scaffolding: excluded from release builds.
+//
+// This file is a build-time / diagnostic tool, not a feature. It used to be
+// compiled into the shipped bundle because app/Makefile built `-c debug`, which
+// made every guard like this one inert. See docs/roadmap.md "Cut before
+// submission".
+
 import Foundation
 import Network
 import ServiceManagement
@@ -190,3 +198,5 @@ enum NetProbe {
 
     private static func emit(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
 }
+
+#endif

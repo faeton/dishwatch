@@ -5,14 +5,30 @@ struct CompactWidget: View {
     var d: DishData
     /// When set (pinned-panel context), shows an × that unpins the widget.
     var onClose: (() -> Void)? = nil
+    /// Provenance of the numbers below. Defaults to `.live` only so the render
+    /// harness and previews stay simple; the real panel always passes the
+    /// store's value.
+    ///
+    /// This widget had no provenance signal of any kind, which mattered more
+    /// here than anywhere else in the app: it is always on top, and with no
+    /// helper the sample provider animates 142.5 Mbps with a moving sparkline.
+    /// The popover has said "sample data" for a while; this never did.
+    var quality: AppState.Quality = .live
+
+    private var trustworthy: Bool { quality.isTrustworthy }
 
     var body: some View {
         VStack(spacing: 0) {
             pinHeader
-            statusRow.padding(.horizontal, 13).padding(.top, 6)
-            throughput.padding(.horizontal, 13).padding(.top, 11)
-            tripleStat.padding(.horizontal, 14).padding(.top, 10)
-            if d.bankAnchored { batteryCard.padding(11) }
+            provenanceBar
+            Group {
+                statusRow.padding(.horizontal, 13).padding(.top, 6)
+                throughput.padding(.horizontal, 13).padding(.top, 11)
+                tripleStat.padding(.horizontal, 14).padding(.top, 10)
+                if d.bankAnchored { batteryCard.padding(11) }
+            }
+            .opacity(trustworthy ? 1 : 0.5)
+            .saturation(trustworthy ? 1 : 0)
         }
         .foregroundStyle(DW.text)
         .frame(width: 316)
@@ -43,9 +59,32 @@ struct CompactWidget: View {
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
     }
 
+    /// One line, only when the numbers are not current. Silent in the normal
+    /// case so the widget stays as small as it was.
+    @ViewBuilder private var provenanceBar: some View {
+        if !trustworthy {
+            let (text, tint): (String, Color) = {
+                switch quality {
+                case .sample:        return ("SAMPLE DATA — NOT A REAL DISH", DW.amber)
+                case .brokenInstall: return ("HELPER MISSING", DW.red)
+                case .loading:       return ("CONNECTING…", DW.textA(0.6))
+                case .offline:       return ("NO DISH FOUND", DW.red)
+                case .stale:         return ("STALE — LAST KNOWN READING", DW.amber)
+                case .live, .disabled: return ("", DW.green)
+                }
+            }()
+            Text(text)
+                .font(.system(size: 9, weight: .bold)).tracking(0.4)
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(tint.opacity(0.14))
+        }
+    }
+
     private var statusRow: some View {
         HStack(spacing: 9) {
-            StatusDot(color: d.state == .connected ? DW.green : DW.amber, pulse: false)
+            StatusDot(color: dotColor, pulse: false)
             Text(d.stateLabel).font(.system(size: 15, weight: .bold))
             Spacer()
             Text("\(d.signalScore)").font(.system(size: 11)).monospacedDigit().foregroundStyle(DW.textA(0.5))
@@ -53,10 +92,26 @@ struct CompactWidget: View {
         }
     }
 
+    /// Peak over the observed session, or an em-dash before there is one.
+    ///
+    /// These cells read `avg <n>` — a 60-second *mean* throughput presented as
+    /// what the link can do. docs/macos-ui.md calls that the dangerous defect
+    /// and it is: mean throughput measures utilization, so an idle dish on a
+    /// flawless link renders `avg 3`, which a user reads as broken. The number
+    /// was correct and the impression it created was false.
+    ///
+    /// The em-dash is the specified cold-start string. Explicitly *not* a
+    /// silent fall back to the 60-second mean, which is the failure this
+    /// replaces, and not `peak 0`, which states a measurement nobody took.
+    private func peakLabel(_ value: Double?) -> String {
+        guard let v = value else { return "peak —" }
+        return "peak \(Int(v))"
+    }
+
     private var throughput: some View {
         HStack(spacing: 1) {
-            tputCell("↓ DOWN", "avg \(Int(d.downAvg))", "\(Int(d.downMbps))", d.downSeries, DW.down)
-            tputCell("↑ UP", "avg \(Int(d.upAvg))", String(format: "%.1f", d.upMbps), d.upSeries, DW.up)
+            tputCell("↓ DOWN", peakLabel(d.observed?.downPeak), "\(Int(d.downMbps))", d.downSeries, DW.down)
+            tputCell("↑ UP", peakLabel(d.observed?.upPeak), String(format: "%.1f", d.upMbps), d.upSeries, DW.up)
         }
         .background(Color.white.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -78,11 +133,31 @@ struct CompactWidget: View {
         .background(DW.cellBG.opacity(0.85))
     }
 
+    /// Matches ConnectedPopover.dotColor. The two surfaces disagreed: this one
+    /// mapped everything non-connected to amber, so a dead dish read as a
+    /// warning here and as an error there — and the always-visible surface was
+    /// the one being gentler about it.
+    private var dotColor: Color {
+        switch d.state {
+        case .connected: return DW.green
+        case .weak:      return DW.amber
+        case .disabled, .offline: return DW.red
+        }
+    }
+
+    /// Drop was hardcoded green, so 100% packet loss rendered in the colour that
+    /// means healthy. Colour is doing real work in a glanceable widget.
+    private var dropColor: Color {
+        if d.dropPct >= 5 { return DW.red }
+        if d.dropPct >= 0.5 { return DW.amber }
+        return DW.green
+    }
+
     private var tripleStat: some View {
         HStack {
             stat("\(Int(d.pingMs))", "ms", "ping", DW.text)
             Spacer()
-            stat(String(format: "%.1f", d.dropPct), "%", "drop", DW.green)
+            stat(String(format: "%.1f", d.dropPct), "%", "drop", dropColor)
             Spacer()
             stat(String(format: "%.1f", d.powerW), "W", "draw", DW.amber)
         }

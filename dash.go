@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/faeton/dishwatch/internal/dish"
-	"github.com/faeton/dishwatch/internal/geo"
 	"github.com/faeton/dishwatch/internal/state"
 	"github.com/faeton/dishwatch/internal/ui"
 )
@@ -24,20 +24,45 @@ func runDash(ctx context.Context) error {
 	}
 	defer c.Close()
 
-	s, h, err := fetchDash(ctx, c)
+	s, h, persistErr, err := fetchDashPersist(ctx, c)
 	if err != nil {
 		_ = state.MarkUnreachable(envOr("STARLINK_DISH", "192.168.100.1:9200"))
 		return renderUnreachable(os.Stdout, false, err)
 	}
+	// The dish answered but the accumulators did not advance, so the Energy and
+	// Observed lines below are older than everything beside them. Say so rather
+	// than printing them as though they were current — a full or read-only cache
+	// directory is otherwise indistinguishable from a healthy poll.
+	warnPersist(persistErr)
 	loc, _ := c.GetLocation(ctx)
 	L := ui.DetectLayout()
 	renderDash(os.Stdout, s, h, loc, L, false)
 	return nil
 }
 
+// warnPersist reports a failure to advance the accumulators, once, to stderr —
+// so it never corrupts `sl json` or the helper's protocol stream on stdout.
+func warnPersist(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: state not saved (%v) — energy and observed figures are stale\n", err)
+	}
+}
+
 // fetchDash fetches status + history in parallel. history may be nil if that
 // call failed; status failure is fatal.
+//
+// The persistence error from snapshotAndLog is returned separately from the
+// fetch error because they mean different things to a caller: the dish data is
+// good either way, but the accumulators did not advance, so anything derived
+// from state.json or stats.json on this tick is stale. Callers warn rather than
+// fail. Discarding it — which is what this used to do — made a full or
+// read-only cache directory look exactly like a healthy poll.
 func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History, error) {
+	s, h, _, err := fetchDashPersist(ctx, c)
+	return s, h, err
+}
+
+func fetchDashPersist(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History, error, error) {
 	type statusRes struct {
 		s   *dish.Status
 		err error
@@ -53,16 +78,16 @@ func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History
 	sr := <-sCh
 	hr := <-hCh
 	if sr.err != nil {
-		return nil, nil, sr.err
+		return nil, nil, nil, sr.err
 	}
-	snapshotAndLog(sr.s, hr.h)
-	return sr.s, hr.h, nil
+	return sr.s, hr.h, snapshotAndLog(sr.s, hr.h), nil
 }
 
 // snapshotAndLog compares the new snapshot against the persisted one, updates
 // the energy accumulator from get_history.powerIn, writes transition events,
-// then replaces state.json.
-func snapshotAndLog(s *dish.Status, h *dish.History) {
+// then replaces state.json. It returns any persistence error; the dish data is
+// still valid when it does, so callers render and warn rather than fail.
+func snapshotAndLog(s *dish.Status, h *dish.History) error {
 	// One lock for the whole poll. Both accumulators below are
 	// load→integrate→save against a monotonic cursor, so the exclusion has to
 	// span the sequence rather than the individual writes — and it has to span
@@ -85,11 +110,22 @@ func snapshotAndLog(s *dish.Status, h *dish.History) {
 		Ping:     s.PopPingLatencyMs,
 		Drop:     s.PopPingDropRate,
 	}
-	cur.EnergyWh, cur.LastCurrent, cur.ObsStartTs, cur.ObsStartUptime =
+	cur.EnergyWh, cur.LastCurrent, cur.ObsStartTs, cur.ObsStartUptime, cur.ObsSeconds =
 		integrateEnergy(s, h, prev, now)
 	_ = state.DiffAndLog(cur, prev)
-	_ = state.Save(cur)
-	integrateStats(s, h, now)
+	// Persistence failures used to be discarded outright, which made a full or
+	// read-only cache directory indistinguishable from a healthy poll: energy
+	// and stats freeze, the dashboard keeps rendering, and once the stall
+	// outruns the ring the missing energy is gone for good. Report them so the
+	// helper can put them in `resp.Error` and the CLI can warn.
+	//
+	// Note the failure the lock cannot help with: Save succeeding while
+	// SaveStats fails desyncs the two files exactly as a race would, because
+	// this is a partial failure rather than an interleaving. Returning the
+	// error is what lets a caller say so.
+	saveErr := state.Save(cur)
+	_, statsErr := integrateStats(s, h, now)
+	return errors.Join(saveErr, statsErr)
 }
 
 // integrateEnergy advances the Wh accumulator based on the powerIn ring in
@@ -101,7 +137,7 @@ func snapshotAndLog(s *dish.Status, h *dish.History) {
 //     so each call integrates only the samples it hasn't already seen.
 //   - On reboot (bootcount change OR uptime went backwards), we reset and
 //     bootstrap from the ring — consuming last min(uptime, ringLen) samples.
-func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now int64) (energyWh float64, lastCur, obsStartTs, obsStartUp int64) {
+func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now int64) (energyWh float64, lastCur, obsStartTs, obsStartUp, obsSec int64) {
 	uptime := s.DeviceState.UptimeS
 	boots := int(s.DeviceInfo.Bootcount)
 
@@ -114,9 +150,10 @@ func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now 
 		lastCur = prev.LastCurrent
 		obsStartTs = prev.ObsStartTs
 		obsStartUp = prev.ObsStartUptime
+		obsSec = prev.ObsSeconds
 	}
 
-	reboot := prev == nil || boots != prevBoots || (prevUptime >= 0 && uptime < prevUptime)
+	reboot := prev == nil || boots != prevBoots || (prevUptime >= 0 && state.IsRestart(uptime, prevUptime))
 
 	if h != nil && len(h.PowerIn) > 0 && h.Current > 0 {
 		ringLen := int64(len(h.PowerIn))
@@ -138,9 +175,7 @@ func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now 
 			energyWh = joules / 3600
 			obsStartTs = now - nb
 			obsStartUp = uptime - nb
-			if obsStartUp < 0 {
-				obsStartUp = 0
-			}
+			obsSec = nb
 			lastCur = cur
 		} else if lastCur > 0 {
 			delta := cur - lastCur
@@ -150,41 +185,77 @@ func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now 
 					joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
 				}
 				energyWh += joules / 3600
+				// An epoch whose count is unknown stays unknown. Adding to it
+				// would pair a numerator holding hours of pre-migration energy
+				// with a denominator counting only the seconds since the
+				// upgrade — measured at 5802 W for a 20 W dish, stated with
+				// full confidence. The next reboot clears the epoch.
+				if obsSec != state.ObsSecondsUnknown {
+					obsSec += delta
+				}
 				lastCur = cur
 			} else if delta > ringLen {
 				// Gap bigger than the ring — samples lost, keep accumulator.
+				// obsSec deliberately does not advance: those seconds happened
+				// but we hold no sample for them, and counting them would make
+				// the average describe energy we never measured.
+				lastCur = cur
+			} else if delta < 0 {
+				// The cursor went backwards without a reboot — the dish's
+				// history service restarted, or firmware renumbered the ring.
+				// Resync and integrate nothing.
+				//
+				// This branch used to be absent, which was worse than it looks:
+				// falling through left lastCur at the stale high value, so
+				// energy froze until the dish counted all the way back past it,
+				// while integrateStats resynced immediately. The two files then
+				// described different windows and were printed on adjacent
+				// lines. Symmetry here is the point.
 				lastCur = cur
 			}
 		} else {
 			// A same-boot snapshot exists but carries no cursor — written by
-			// the bash `sl`, or by a build predating this accumulator. We used
-			// to just adopt the cursor and integrate nothing, which threw away
-			// every sample the ring still held and started the Wh total at
-			// zero mid-boot. Bootstrap from the ring exactly as the reboot
-			// path does, so this agrees with integrateStats, which bootstraps
-			// whenever it has no samples.
-			nb := uptime
-			if nb > ringLen {
-				nb = ringLen
-			}
-			if nb > cur {
-				nb = cur
-			}
-			var joules float64
-			for i := cur - nb; i < cur; i++ {
-				joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
-			}
-			energyWh += joules / 3600
-			lastCur = cur
-			if obsStartTs == 0 {
-				obsStartTs = now - nb
-			}
-			if obsStartUp == 0 {
-				obsStartUp = uptime - nb
-				if obsStartUp < 0 {
-					obsStartUp = 0
+			// the bash `sl`, or by a build predating this accumulator.
+			//
+			// Two sub-cases, and conflating them was a bug. If no energy has
+			// been recorded yet there is nothing to lose, so bootstrap from the
+			// ring exactly as the reboot path does. But if a total is already
+			// there, we do not know how much of the ring it already covers —
+			// this branch used to fold the ring in with `+=` on top of it,
+			// which invented energy: a real 14.45 Wh total plus a full 900
+			// sample ring at 20 W published 19.45 Wh, a 5 Wh phantom.
+			//
+			// Folding is unsafe and discarding is lossy, so do neither: adopt
+			// the cursor and integrate nothing. We give up at most the ring
+			// (~15 min) rather than fabricate, which is the same under-claim
+			// integrateStats makes for a gap wider than the ring.
+			if energyWh != 0 {
+				// A total we cannot account for. Adopt the cursor, fold nothing
+				// (see below), and mark the observation window unknown so no
+				// average is offered for this epoch. The next reboot clears it.
+				obsSec = state.ObsSecondsUnknown
+			} else {
+				nb := uptime
+				if nb > ringLen {
+					nb = ringLen
+				}
+				if nb > cur {
+					nb = cur
+				}
+				var joules float64
+				for i := cur - nb; i < cur; i++ {
+					joules += h.PowerIn[((i%ringLen)+ringLen)%ringLen]
+				}
+				energyWh = joules / 3600
+				obsSec = nb
+				if obsStartTs == 0 {
+					obsStartTs = now - nb
+				}
+				if obsStartUp == 0 {
+					obsStartUp = uptime - nb
 				}
 			}
+			lastCur = cur
 		}
 	}
 	if obsStartTs == 0 {
@@ -398,7 +469,7 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 	Rcol = append(Rcol, sec("⎈", "Link"))
 
 	if loc != nil {
-		place, _ := geo.Reverse(context.Background(), loc.LLA.Lat, loc.LLA.Lon)
+		place, _ := reverseGeocode(context.Background(), loc.LLA.Lat, loc.LLA.Lon)
 		if place == "" || place == "unknown" {
 			place = dashIf(s.DeviceInfo.CountryCode)
 		}
@@ -503,17 +574,42 @@ func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 		fmt.Fprintf(w, "  %sPower %s%s%s  %snow %.1f W · avg %.1f W%s\n",
 			ui.Lbl, ui.Warn, ui.Spark(pw, 0), ui.Rst, ui.Dim, pwNow, pwAvg, ui.Rst)
 	}
-	renderEnergy(w, L)
-	renderObserved(w, L)
+	pv := loadPersisted()
+	renderEnergy(w, L, pv)
+	renderObserved(w, L, pv.stats)
+}
+
+// persisted is state.json, stats.json and the power-bank anchor read as one
+// generation.
+//
+// They used to be read one at a time, straight from the render functions. Each
+// read was individually fine and the combination was not: a poll committing
+// between them let the Energy line describe generation N−1 while the Observed
+// block four lines below described generation N. That is the same cross-file
+// skew the write-side transaction exists to prevent — `lock.go` even cites the
+// resulting "obs 21m 8s @ 22.7 W" line as its motivating symptom, and that line
+// is printed from here. A shared lock on the read side is the other half of it.
+type persisted struct {
+	snap   *state.Snapshot
+	stats  *state.Stats
+	anchor *Anchor
+}
+
+func loadPersisted() persisted {
+	txn, _ := state.BeginRead()
+	defer txn.Close()
+	snap, _ := state.Load()
+	st, _ := state.LoadStats()
+	a, _ := loadAnchor()
+	return persisted{snap: snap, stats: st, anchor: a}
 }
 
 // renderObserved writes the long-window section fed by stats.json. Every figure
 // here covers *observed* samples within the current dish boot — time the CLI
 // was not running contributes nothing and is never estimated. The header says
 // so, which is why no per-line qualifier is needed.
-func renderObserved(w io.Writer, L ui.Layout) {
-	st, err := state.LoadStats()
-	if err != nil || !st.Ready() {
+func renderObserved(w io.Writer, L ui.Layout, st *state.Stats) {
+	if !st.Ready() {
 		return // too few samples to call these statistics
 	}
 
@@ -561,34 +657,36 @@ func renderObserved(w io.Writer, L ui.Layout) {
 
 // renderEnergy writes the Energy (and optional Bank) lines, derived from
 // the persisted snapshot's accumulator.
-func renderEnergy(w io.Writer, L ui.Layout) {
-	snap, err := state.Load()
-	if err != nil || snap == nil || snap.EnergyWh <= 0 {
+func renderEnergy(w io.Writer, L ui.Layout, pv persisted) {
+	snap := pv.snap
+	if snap == nil || snap.EnergyWh <= 0 {
 		return
 	}
-	now := time.Now().Unix()
-	obsDur := now - snap.ObsStartTs
-	if obsDur < 1 {
-		obsDur = 1
-	}
-	avgW := snap.EnergyWh * 3600 / float64(obsDur)
-	estWh := snap.EnergyWh * float64(snap.UptimeS) / float64(obsDur)
-	obsStr := state.HumanDur(obsDur)
 	upStr := state.HumanDur(snap.UptimeS)
+	avgW, haveAvg := snap.ObservedAvgW()
 
-	if obsDur*100 >= snap.UptimeS*95 {
+	switch {
+	case !haveAvg:
+		// A snapshot from before the sample counter existed. We hold a total
+		// but no honest denominator, so quote the total and nothing else
+		// rather than divide by wall clock.
+		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %sover %s%s\n",
+			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, upStr, ui.Rst)
+	case snap.ObservedCoversBoot():
 		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %ssince boot (%s) · avg %.1f W%s\n",
 			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, upStr, avgW, ui.Rst)
-	} else {
+	default:
+		obsStr := state.HumanDur(snap.ObsSeconds)
+		estWh := snap.EnergyWh * float64(snap.UptimeS) / float64(snap.ObsSeconds)
 		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %sobs %s @ %.1f W · est %.1f Wh over %s%s\n",
 			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, obsStr, avgW, estWh, upStr, ui.Rst)
 	}
-	renderBank(w, L, snap, avgW)
+	renderBank(w, L, pv, avgW)
 }
 
 // renderBank draws the power-bank depletion line if an anchor or env override
 // is set. Implemented fully in pb.go (this is a stub satisfied at link time).
-var renderBank = func(w io.Writer, L ui.Layout, snap *state.Snapshot, avgW float64) {}
+var renderBank = func(w io.Writer, L ui.Layout, pv persisted, avgW float64) {}
 
 // ----- helpers -----
 

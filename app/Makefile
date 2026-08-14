@@ -16,7 +16,14 @@
 
 APP        := DishWatch
 BUNDLE_ID  := com.faeton.dishwatch
-CONFIG     := debug
+
+# Release, and this is not a detail. Building `-c debug` meant every `#if DEBUG`
+# block written to keep development scaffolding *out* of a shipped app was
+# compiled *into* it — including HelperProvider's DISHWATCH_BIN lookup, whose own
+# comment says it must never reach a release build because a shipped app that
+# goes looking through the environment for its helper can be pointed at an
+# arbitrary binary. `make icon` still needs a debug build; it overrides below.
+CONFIG     := release
 BUILD_DIR  := .build/$(CONFIG)
 APP_DIR    := .build/$(APP).app
 CONTENTS   := $(APP_DIR)/Contents
@@ -30,9 +37,13 @@ SHORT_VER  := $(shell echo "$(VERSION)" | sed -E 's/^v//; s/-.*//; s/^[^0-9].*/0
 # goes up, which is all the Store requires of it.
 BUILD_NUM  := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 
-# Built by the repo's own Makefile; not rebuilt here, so `make app` stays a
-# packaging step rather than a cross-language build.
-HELPER_SRC ?= ../bin/dishwatch
+# The engine that ships inside the bundle. Built with `-tags apphelper`, which
+# omits `speed` (exec's ping and networkQuality), `raw` (arbitrary gRPC) and the
+# Nominatim geocoder — none of which the app invokes, all of which were
+# previously submitted to review inside the nested binary because this used to
+# copy the full CLI. Verify with:
+#     strings Contents/MacOS/dishwatch-helper | grep -c networkQuality   # → 0
+HELPER_SRC ?= ../bin/dishwatch-helper
 
 SANDBOX    ?= 1
 ifeq ($(SANDBOX),1)
@@ -45,7 +56,58 @@ endif
 # machine, which is what the spike needs; it is not enough to distribute.
 CODESIGN_ID ?= -
 
-.PHONY: app run icon clean-app test
+# A secure timestamp is mandatory for notarization — a bundle signed
+# `--timestamp=none` is rejected with "The signature does not include a secure
+# timestamp", after the upload, which is a slow way to find out. It was
+# hardcoded off here because it costs a round-trip to Apple's TSA on every
+# build and an ad-hoc signature cannot carry one anyway. So: off for ad-hoc,
+# on for every real identity. Getting this backwards is invisible until you
+# notarize, since `codesign --verify` passes either way.
+ifeq ($(CODESIGN_ID),-)
+TIMESTAMP := --timestamp=none
+else
+TIMESTAMP := --timestamp
+endif
+
+# Where notarytool finds its App Store Connect credentials. Create once with:
+#   xcrun notarytool store-credentials dishwatch \
+#     --apple-id <you@example.com> --team-id $(TEAM_ID) --password <app-specific>
+NOTARY_PROFILE ?= dishwatch
+TEAM_ID        ?= BKY9R5336T
+DMG            := .build/$(APP)-$(SHORT_VER).dmg
+ZIP            := .build/$(APP)-$(SHORT_VER).zip
+
+# The helper's entitlements depend on whether the app is sandboxed, and getting
+# this wrong is fatal rather than degraded. `com.apple.security.inherit` means
+# "adopt my parent's sandbox"; with an unsandboxed parent there is nothing to
+# adopt, so libsecinit aborts the child in its initializer — EXC_BREAKPOINT
+# before main(), no output, no error the app can catch. `make app SANDBOX=0`
+# built exactly that: the app came up fine and the helper died on every spawn,
+# which reads as a dish problem rather than a packaging one. Measured: 5 crash
+# reports in ~30s of retries.
+ifeq ($(SANDBOX),1)
+HELPER_ENTITLEMENTS := --entitlements Resources/helper.entitlements
+else
+HELPER_ENTITLEMENTS :=
+endif
+
+# Release artifacts are universal. `swift build` and `go build` are both
+# host-native by default, so the DMG built on this arm64 laptop simply will not
+# run on the Intel Macs that macOS 14 still supports — and it fails as "app is
+# damaged", which reads like a signing fault. Dev builds stay host-only; only
+# the release path pays the double build.
+UNIVERSAL   ?= 0
+ifeq ($(UNIVERSAL),1)
+SWIFT_ARCH    := --arch arm64 --arch x86_64
+# Capitalised, and a different tree entirely, when SwiftPM is given --arch.
+SWIFT_PRODUCT := .build/apple/Products/$(shell echo $(CONFIG) | awk '{print toupper(substr($$0,1,1)) substr($$0,2)}')/$(APP)
+else
+SWIFT_ARCH    :=
+SWIFT_PRODUCT := $(BUILD_DIR)/$(APP)
+endif
+
+.PHONY: app run icon clean-app test dmg notarize notarize-app verify-release \
+        check-identity universal-helper
 
 # Always reassembles rather than treating $(APP_DIR) as a file target. A
 # directory target compares mtimes against sources, which is wrong here in a way
@@ -54,16 +116,38 @@ CODESIGN_ID ?= -
 # would print "sandbox=0" and hand you back the sandboxed bundle. Assembling is
 # a copy and a codesign — cheap enough that caching it buys nothing and can lie.
 app:
-	swift build -c $(CONFIG)
+	swift build -c $(CONFIG) $(SWIFT_ARCH)
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
-	cp "$(BUILD_DIR)/$(APP)" "$(CONTENTS)/MacOS/$(APP)"
+	# A multi-arch `swift build` writes to .build/apple/Products/<Config>/,
+	# not .build/<config>/ — so $(BUILD_DIR) is wrong precisely when it matters.
+	cp "$(SWIFT_PRODUCT)" "$(CONTENTS)/MacOS/$(APP)"
 	# The engine. A sandboxed app cannot reach a CLI installed outside its
 	# bundle, so this is not a convenience — it is the only path that works for
 	# the Store build.
-	@test -x "$(HELPER_SRC)" || { echo "  missing $(HELPER_SRC) — run: (cd .. && go build -o bin/dishwatch .)" >&2; exit 1; }
+	@test -x "$(HELPER_SRC)" || { echo "  missing $(HELPER_SRC) — run: (cd .. && go build -tags apphelper -o bin/dishwatch-helper .)" >&2; exit 1; }
 	cp "$(HELPER_SRC)" "$(CONTENTS)/MacOS/dishwatch-helper"
+	# Refuse to ship a helper built without the apphelper tag. The two binaries
+	# are byte-similar enough that a packaging slip is invisible by eye, and the
+	# consequence — networkQuality, arbitrary gRPC and a third-party geocoder
+	# inside the submission — is exactly what the tag exists to prevent.
+	@if strings -a "$(CONTENTS)/MacOS/dishwatch-helper" | grep -q networkQuality; then \
+	  echo "  ERROR: helper contains networkQuality — rebuild with -tags apphelper" >&2; exit 1; fi
+	# The helper is copied from a separate build tree, so UNIVERSAL=1 says
+	# nothing about it. A universal app around an arm64-only helper is the worst
+	# of both: it launches on an Intel Mac and then the engine dies on every
+	# spawn, which presents as a dish fault. This build produced exactly that
+	# before the check existed — `make helper` had last written a host-only
+	# binary and nothing noticed.
+	@if [ "$(UNIVERSAL)" = "1" ]; then \
+	  archs="$$(lipo -archs "$(CONTENTS)/MacOS/dishwatch-helper")"; \
+	  case "$$archs" in \
+	    *arm64*x86_64*|*x86_64*arm64*) ;; \
+	    *) echo "  ERROR: UNIVERSAL=1 but the helper is '$$archs' — run: (cd .. && make helper-universal)" >&2; exit 1;; \
+	  esac; \
+	fi
 	cp Resources/AppIcon.icns "$(CONTENTS)/Resources/AppIcon.icns"
+	cp Resources/PrivacyInfo.xcprivacy "$(CONTENTS)/Resources/PrivacyInfo.xcprivacy"
 	cp Resources/Info.plist "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(SHORT_VER)" "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUM)" "$(CONTENTS)/Info.plist"
@@ -76,13 +160,13 @@ app:
 	# embedded-tool rule is that a child inherits the parent's sandbox, and
 	# handing it an independent profile is what breaks that.
 	codesign --force --sign "$(CODESIGN_ID)" \
-	         --entitlements Resources/helper.entitlements \
-	         --options runtime --timestamp=none \
+	         $(HELPER_ENTITLEMENTS) \
+	         --options runtime $(TIMESTAMP) \
 	         "$(CONTENTS)/MacOS/dishwatch-helper"
 	codesign --force --sign "$(CODESIGN_ID)" \
 	         --entitlements "$(ENTITLEMENTS)" \
 	         --options runtime \
-	         --timestamp=none \
+	         $(TIMESTAMP) \
 	         "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
 	@echo "  $(APP_DIR)  $(SHORT_VER) ($(BUILD_NUM))  sandbox=$(SANDBOX)  id=$(CODESIGN_ID)"
@@ -96,6 +180,11 @@ run: app
 # Regenerates the icon from DishArcGlyph via the render harness, so the app
 # icon and the menu-bar glyph share a source. Checked in, because building the
 # app should not require running the app.
+# Deliberately debug: the render harness this drives is behind `#if DEBUG`, so a
+# release build has no DISHWATCH_APPICON path to invoke. That is the point — it
+# is a build-time tool, not a runtime feature of the shipped app.
+icon: CONFIG := debug
+icon: BUILD_DIR := .build/debug
 icon:
 	swift build -c $(CONFIG)
 	@rm -rf .build/AppIcon.iconset && mkdir -p .build/AppIcon.iconset
@@ -111,5 +200,112 @@ icon:
 test:
 	swift test
 
+# ---- direct distribution (Developer ID + notarization) ----------------------
+#
+# This is the path the certificates on this machine actually support. The Mac
+# App Store needs a different pair of certs ("Apple Distribution" and "3rd
+# Party Mac Developer Installer"), a different entitlements file carrying the
+# team-injected application-identifier, and `productbuild` rather than a DMG —
+# see docs/roadmap.md. Do not assume this target gets you there.
+#
+# ONE command, and it must carry the identity:
+#
+#   make notarize CODESIGN_ID="Developer ID Application: ... (TEAMID)"
+#
+# Not two. `make notarize` on its own re-enters `dmg` with the default ad-hoc
+# identity and is refused — make does not carry command-line variables between
+# invocations, so a documented two-step sequence silently loses CODESIGN_ID.
+
+# The identity has to be a Developer ID Application cert from our team, and
+# `!= "-"` does not establish that. An Apple Development or wrong-team cert
+# signs and timestamps happily, then fails at the notary after the upload.
+# Checked against the signed output rather than the string, so it also catches
+# a codesign that quietly picked a different matching identity.
+check-identity:
+	@case "$(CODESIGN_ID)" in -|"") \
+	  echo "  refusing to package an ad-hoc build — pass CODESIGN_ID=\"Developer ID Application: ...\"" >&2; \
+	  exit 1;; esac
+	@codesign -dvv "$(APP_DIR)" 2>&1 | grep -q "^Authority=Developer ID Application:" \
+	  || { echo "  ERROR: not signed by a Developer ID Application cert — the notary will reject it" >&2; exit 1; }
+	@codesign -dvv "$(APP_DIR)" 2>&1 | grep -q "^TeamIdentifier=$(TEAM_ID)$$" \
+	  || { echo "  ERROR: team is not $(TEAM_ID)" >&2; exit 1; }
+	# Both binaries, not just the outer one. The notary inspects nested code and
+	# rejects the submission for the helper just as readily.
+	@for b in "$(APP_DIR)" "$(CONTENTS)/MacOS/dishwatch-helper"; do \
+	  codesign -dvv "$$b" 2>&1 | grep -q "^Timestamp=" \
+	    || { echo "  ERROR: $$b carries no secure timestamp — the notary would reject this" >&2; exit 1; }; \
+	  codesign -dvv "$$b" 2>&1 | grep -q "flags=.*runtime" \
+	    || { echo "  ERROR: $$b is not hardened-runtime" >&2; exit 1; }; \
+	done
+	@echo "  identity ok — Developer ID, team $(TEAM_ID), timestamped, hardened, universal=$(UNIVERSAL)"
+
+# Stage one: notarize and staple the .app itself.
+#
+# Stapling only the DMG is the common shortcut and it is not enough here. The
+# ticket is attached to the container the user double-clicks; once they drag the
+# app to /Applications, that copy carries quarantine but no ticket, so first
+# launch needs syspolicyd to fetch the ticket over the network. For an app whose
+# users' internet *is* the dish — plausibly down at exactly that moment — that
+# is a likely path, not an edge case. So the app gets its own ticket, and the
+# DMG is built afterwards around the already-stapled app.
+notarize-app:
+	$(MAKE) app CODESIGN_ID="$(CODESIGN_ID)" UNIVERSAL="$(UNIVERSAL)"
+	$(MAKE) check-identity CODESIGN_ID="$(CODESIGN_ID)"
+	@rm -f "$(ZIP)"
+	# ditto, not zip: it preserves the bundle's symlinks and extended
+	# attributes, and the signature does not survive a naive zip.
+	/usr/bin/ditto -c -k --keepParent "$(APP_DIR)" "$(ZIP)"
+	xcrun notarytool submit "$(ZIP)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple "$(APP_DIR)"
+	@rm -f "$(ZIP)"
+
+# Stage two: wrap the stapled app, sign the image, notarize and staple that too.
+dmg: notarize-app
+	@rm -f "$(DMG)"
+	hdiutil create -volname "$(APP)" -srcfolder "$(APP_DIR)" \
+	  -ov -format UDZO -quiet "$(DMG)"
+	# The image gets a signature but not a hardened runtime — there is no code
+	# in it to harden, and passing --options runtime to a disk image is a no-op
+	# that only muddies the verification output.
+	codesign --force --sign "$(CODESIGN_ID)" --timestamp "$(DMG)"
+	@echo "  $(DMG)"
+
+notarize: dmg
+	xcrun notarytool submit "$(DMG)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple "$(DMG)"
+	$(MAKE) verify-release
+
+# What a user's machine will actually conclude — which is not what the build
+# tree says. This used to assess $(APP_DIR): never quarantined, already launched
+# here, and not the copy that comes out of the image. That check passes for
+# builds a clean Mac will bounce.
+#
+# So: mount the real DMG, pull the app out the way a user does, mark it
+# quarantined, and ask Gatekeeper. `--type open` is the assessment for the
+# image; `--type execute` is the one for the app.
+# No prerequisite on purpose — this must be runnable against an artifact built
+# earlier, or one someone hands you. It refuses rather than assessing nothing.
+verify-release:
+	@test -f "$(DMG)" || { echo "  no $(DMG) — run: make notarize CODESIGN_ID=..." >&2; exit 1; }
+	xcrun stapler validate "$(DMG)"
+	hdiutil verify "$(DMG)"
+	codesign --verify --strict --verbose=2 "$(DMG)"
+	@echo "  --- Gatekeeper on the disk image ---"
+	spctl --assess --type open --context context:primary-signature --verbose=2 "$(DMG)"
+	@echo "  --- Gatekeeper on the app as a user receives it ---"
+	@set -e; \
+	 mp="$$(hdiutil attach -nobrowse -readonly "$(DMG)" | tail -1 | cut -f3-)"; \
+	 trap 'hdiutil detach "$$mp" -quiet 2>/dev/null || true' EXIT; \
+	 rm -rf .build/verify && mkdir -p .build/verify; \
+	 /usr/bin/ditto "$$mp/$(APP).app" ".build/verify/$(APP).app"; \
+	 xattr -w com.apple.quarantine "0083;00000000;Safari;" ".build/verify/$(APP).app"; \
+	 xcrun stapler validate ".build/verify/$(APP).app"; \
+	 spctl --assess --type execute --verbose=2 ".build/verify/$(APP).app"; \
+	 codesign --verify --deep --strict --verbose=2 ".build/verify/$(APP).app"; \
+	 echo "  architectures: $$(lipo -archs ".build/verify/$(APP).app/Contents/MacOS/$(APP)")"; \
+	 echo "  helper:        $$(lipo -archs ".build/verify/$(APP).app/Contents/MacOS/dishwatch-helper")"; \
+	 rm -rf .build/verify
+
 clean-app:
-	rm -rf "$(APP_DIR)" .build/AppIcon.iconset .build/appicon-1024.png
+	rm -rf "$(APP_DIR)" .build/AppIcon.iconset .build/appicon-1024.png \
+	       .build/verify .build/$(APP)-*.dmg .build/$(APP)-*.zip

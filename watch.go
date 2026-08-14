@@ -125,7 +125,11 @@ func runWatch(ctx context.Context, every int) error {
 				doneCh <- clientErr
 				return
 			}
-			s, h, err := fetchDash(ctx, client)
+			// Persistence errors are deliberately not printed here: watch owns
+			// the alt screen, and a stderr write in the middle of a frame
+			// corrupts it. A one-shot `sl dash` reports them, and the symptom
+			// is visible anyway — the Energy line stops advancing.
+			s, h, _, err := fetchDashPersist(ctx, client)
 			if err != nil {
 				doneCh <- err
 				return

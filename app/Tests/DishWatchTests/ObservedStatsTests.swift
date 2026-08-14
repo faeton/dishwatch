@@ -18,8 +18,13 @@ final class ObservedStatsTests: XCTestCase {
         "sessPowerAvg": 23.8, "sessPowerPeak": 48.1,
     ]
 
+    /// Every payload carries the current schema version and a state, because
+    /// both are strict now — a decode is expected to fail without them, and
+    /// these tests are about the *Observed block*, not about that.
     private func decode(_ payload: [String: Any]) throws -> DishData {
-        let data = try JSONSerialization.data(withJSONObject: payload)
+        var body: [String: Any] = ["schemaVersion": DishData.expectedSchema, "state": "Connected"]
+        body.merge(payload) { _, new in new }
+        let data = try JSONSerialization.data(withJSONObject: body)
         return try JSONDecoder().decode(DishData.self, from: data)
     }
 
@@ -95,7 +100,8 @@ final class ObservedStatsTests: XCTestCase {
         XCTAssertNotNil(try decode(payload).observed, "large but finite is a real reading")
 
         let overflowing = """
-        {"obsSeconds":8040,"obsCoverage":0.94,"sessPingAvg":29,"sessCleanPct":92,
+        {"schemaVersion":1,"state":"Connected",
+         "obsSeconds":8040,"obsCoverage":0.94,"sessPingAvg":29,"sessCleanPct":92,
          "sessDegradedPct":6,"sessDarkPct":2,"sessOutages":11,"sessOutageSeconds":143,
          "sessLongestOutage":58,"sessDownPeak":1e400,"sessUpPeak":41,
          "sessDownBytes":4.2e9,"sessUpBytes":6e8,"sessPowerAvg":23.8,"sessPowerPeak":48.1}
@@ -160,5 +166,53 @@ final class GoldenFixtureTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(o.seconds, ObservedStats.minSeconds)
         XCTAssertGreaterThan(o.pingAvg, 0)
         XCTAssertEqual(o.cleanPct + o.degradedPct + o.darkPct, 100, accuracy: 0.5)
+    }
+}
+
+/// The two keys that are strict, and why.
+///
+/// Both were lenient. `state` fell back to `.offline` inside a `try?`, so a Go
+/// side that renamed or added a case rendered correct, current metrics under a
+/// wrong header with a footer still reading "live" — the failure was invisible
+/// on both sides of the pipe. `schemaVersion` did not exist at all, so a field
+/// rename needed no bump anywhere.
+final class ContractStrictnessTests: XCTestCase {
+
+    private func decode(_ json: String) throws -> DishData {
+        try JSONDecoder().decode(DishData.self, from: Data(json.utf8))
+    }
+
+    func testMissingSchemaVersionIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"state":"Connected","pingMs":17.6}"#),
+                             "a payload with no schemaVersion predates the contract")
+    }
+
+    func testWrongSchemaVersionIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"schemaVersion":99,"state":"Connected"}"#))
+    }
+
+    func testMissingStateIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"schemaVersion":1,"pingMs":17.6}"#),
+                             "state is the discriminator; absent it the snapshot is unusable")
+    }
+
+    func testUnknownStateIsRejected() {
+        // The concrete regression: a future CLI adds a "Booting" state. Under
+        // the old decoder this became .offline and everything else rendered as
+        // live.
+        XCTAssertThrowsError(try decode(#"{"schemaVersion":1,"state":"Booting","pingMs":17.6}"#))
+    }
+
+    func testMistypedStateIsRejected() {
+        XCTAssertThrowsError(try decode(#"{"schemaVersion":1,"state":42}"#))
+    }
+
+    func testMetricsStayLenient() throws {
+        // Additive and partial payloads must still work: only the two keys
+        // above are strict, or every new Go field becomes a breaking change.
+        let d = try decode(#"{"schemaVersion":1,"state":"Connected","somethingNew":123}"#)
+        XCTAssertEqual(d.state, .connected)
+        XCTAssertEqual(d.pingMs, 0, "absent metric reads as no-reading, not as a mock-up default")
+        XCTAssertEqual(d.downMbps, 0)
     }
 }

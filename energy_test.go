@@ -137,7 +137,7 @@ func TestIntegrateEnergy(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotWh, gotCur, _, _ := integrateEnergy(tc.status, tc.hist, tc.prev, 1_700_000_000)
+			gotWh, gotCur, _, _, _ := integrateEnergy(tc.status, tc.hist, tc.prev, 1_700_000_000)
 			if math.Abs(gotWh-tc.wantWh) > epsilon {
 				t.Errorf("energyWh = %v, want %v", gotWh, tc.wantWh)
 			}
@@ -162,7 +162,7 @@ func TestIntegrateEnergyWithoutHistory(t *testing.T) {
 		{"zero cursor", &dish.History{Current: 0, PowerIn: make([]float64, 900)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gotWh, gotCur, _, _ := integrateEnergy(statusAt(1, 1010), tc.hist, prev, 1_700_000_000)
+			gotWh, gotCur, _, _, _ := integrateEnergy(statusAt(1, 1010), tc.hist, prev, 1_700_000_000)
 			if math.Abs(gotWh-42) > epsilon {
 				t.Errorf("energyWh = %v, want 42 (unchanged)", gotWh)
 			}

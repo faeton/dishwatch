@@ -188,8 +188,15 @@ func runPb(ctx context.Context, args []string) error {
 
 	// Refresh state by running a dash pass silently so we have the latest
 	// energy accumulator to anchor against.
+	//
+	// This must be fatal, not a warning. An anchor is only meaningful as a
+	// (pct, energyWh) pair: it means "the bank was at this percentage when the
+	// dish had drawn this many Wh". Pinning a fresh percentage to a stale
+	// energyWh silently biases every depletion estimate for the life of the
+	// anchor, which is exactly what setAnchor's own comment below warns about —
+	// warning and carrying on reintroduced it one level up.
 	if err := runDashSilent(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: could not refresh state before anchor:", err)
+		return fmt.Errorf("cannot anchor against stale state: %w", err)
 	}
 	snap, err := state.Load()
 	if err != nil || snap == nil {
@@ -237,8 +244,11 @@ func runDashSilent(ctx context.Context) error {
 
 // pbRenderBank is the implementation installed into the renderBank indirection
 // defined in dash.go. Runs as part of the Energy section.
-func pbRenderBank(w io.Writer, L ui.Layout, snap *state.Snapshot, avgW float64) {
-	a, _ := loadAnchor()
+func pbRenderBank(w io.Writer, L ui.Layout, pv persisted, avgW float64) {
+	snap, a := pv.snap, pv.anchor
+	if snap == nil {
+		return
+	}
 	envWh, _ := strconv.ParseFloat(os.Getenv("SL_PB_WH"), 64)
 	envStartPct := 100.0
 	if v, err := strconv.ParseFloat(os.Getenv("SL_PB_START_PCT"), 64); err == nil && v > 0 {
@@ -269,13 +279,14 @@ func pbRenderBank(w io.Writer, L ui.Layout, snap *state.Snapshot, avgW float64) 
 		source = fmt.Sprintf("anchor %.1f%% set %s ago", a.Pct, state.HumanDur(age))
 	} else {
 		// Extrapolate from boot: assume full at boot, estimate total burn
-		// over the full uptime from the observation window.
-		now := time.Now().Unix()
-		obsDur := now - snap.ObsStartTs
-		if obsDur < 1 {
-			obsDur = 1
+		// over the full uptime from the observation window. The window is the
+		// count of samples we integrated, not elapsed wall clock — scaling by
+		// elapsed time understates the burn by however long we were not
+		// watching, which reads as a fuller bank than there is.
+		if snap.ObsSeconds < 1 {
+			return // no honest observation window to extrapolate from
 		}
-		usedWh = snap.EnergyWh * float64(snap.UptimeS) / float64(obsDur)
+		usedWh = snap.EnergyWh * float64(snap.UptimeS) / float64(snap.ObsSeconds)
 		pctLeft = envStartPct - usedWh*100/cap
 		source = fmt.Sprintf("assuming %.0f%% at boot · set via: sl pb <current%%> [bank_wh]", envStartPct)
 	}

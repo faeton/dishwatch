@@ -1,8 +1,8 @@
 # DishWatch.app
 
 Native macOS menu-bar app for the Starlink dish monitor — the GUI companion to
-the `sl` CLI. Implements the design in
-[`DishWatch.dc.html`](../docs/) (Claude Design project "Dishwatch status bar UI").
+the `sl` CLI. Which statistic goes where, over which window, and with which
+exact label string is settled in [`docs/macos-ui.md`](../docs/macos-ui.md).
 
 > Status: **live data through an embedded helper.** The app supervises one
 > long-lived `dishwatch helper` child that holds the gRPC connection and answers

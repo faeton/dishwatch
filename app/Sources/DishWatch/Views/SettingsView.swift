@@ -51,7 +51,13 @@ struct SettingsView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("DishWatch \(appVersion)").font(.system(size: 11)).foregroundStyle(DW.textA(0.55))
-                            Text(store.isLive ? "Live · unofficial Starlink monitor" : "Sample data · install the dishwatch CLI for live")
+                            // Was `isLive ? "Live" : "Sample data · install the
+                            // dishwatch CLI"`. Both halves were wrong for a
+                            // shipped build: `isLive` only means a provider was
+                            // selected, so it read "Live" while every poll
+                            // failed; and the other branch told a Store user to
+                            // install a CLI that is not how this app works.
+                            Text(statusLine)
                                 .font(.system(size: 10.5)).foregroundStyle(DW.textA(0.4))
                         }
                         Spacer()
@@ -88,6 +94,19 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 11)
         .overlay(Divider().background(DW.hairline), alignment: .bottom)
+    }
+
+    /// Mirrors the popover footer, so the two never disagree about whether the
+    /// app is working.
+    private var statusLine: String {
+        switch store.quality {
+        case .live, .disabled: return "Live · unofficial dish monitor"
+        case .loading:         return "Connecting…"
+        case .offline:         return "No dish found · unofficial dish monitor"
+        case .stale:           return "Not responding · showing the last reading"
+        case .sample:          return "Sample data · development build"
+        case .brokenInstall:   return "Helper missing · reinstalling should fix it"
+        }
     }
 
     private var appVersion: String {

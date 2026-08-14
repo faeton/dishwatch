@@ -5,21 +5,29 @@ import SwiftUI
 struct BatteryPopover: View {
     var d: DishData
     @Binding var showSettings: Bool
+    /// Routed through PopoverView so the setup screen replaces the panel's
+    /// content instead of being presented as an unclickable sheet.
+    @Binding var showBankSetup: Bool
     @EnvironmentObject var store: AppState
-    @State private var showSetup = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            hero
-            facts.padding(.horizontal, 16)
-            drawRow
-            linkState.padding(.horizontal, 16).padding(.top, 8)
+            Group {
+                hero
+                facts.padding(.horizontal, 16)
+                drawRow
+                linkState.padding(.horizontal, 16).padding(.top, 8)
+            }
+            // Same treatment as the mains popover. Without it the battery
+            // layout kept counting "dies in 2h 18m" off a frozen wattage while
+            // the helper was dead, with no signal anywhere in the panel.
+            .opacity(store.quality.isTrustworthy ? 1 : 0.5)
+            .saturation(store.quality.isTrustworthy ? 1 : 0)
             footer
         }
         .foregroundStyle(DW.text)
         .overlay(TopGlow(color: DW.amber, height: 120), alignment: .top)
-        .sheet(isPresented: $showSetup) { BatterySetupSheet(d: d).frame(width: 392) }
     }
 
     private var header: some View {
@@ -108,7 +116,13 @@ struct BatteryPopover: View {
     private var linkState: some View {
         let stats = ["\(Int(d.downMbps)) Mbps", "\(Int(d.pingMs)) ms", "sig \(d.signalScore)"]
         return HStack(spacing: 9) {
-            StatusDot(color: d.state == .connected ? DW.green : DW.amber, size: 8, pulse: false)
+            StatusDot(color: {
+            switch d.state {
+            case .connected: return DW.green
+            case .weak:      return DW.amber
+            case .disabled, .offline: return DW.red
+            }
+        }(), size: 8, pulse: false)
             Text(d.stateLabel).font(.system(size: 12, weight: .semibold))
             ForEach(stats, id: \.self) { s in
                 Text("·").foregroundStyle(DW.textA(0.4))
@@ -124,7 +138,7 @@ struct BatteryPopover: View {
         HStack {
             Text("anchored \(d.anchoredAgoText)").font(.system(size: 11)).foregroundStyle(DW.textA(0.4))
             Spacer()
-            DWButton(title: "Adjust bank…") { showSetup = true }
+            DWButton(title: "Adjust bank…") { showBankSetup = true }
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 15)
     }

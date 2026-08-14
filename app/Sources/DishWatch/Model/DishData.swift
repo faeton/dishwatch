@@ -20,7 +20,10 @@ enum LinkState: String, Decodable, Sendable {
 /// and the render harness construct. Sample data and decode fallbacks are two
 /// different jobs; conflating them is how a dropped field ends up rendering
 /// "142.5 Mbps" under a footer that reads "live".
-struct DishData: Decodable, Sendable {
+// Equatable so AppState can skip republishing an identical snapshot, and so the
+// menu-bar glyph cache has something to compare against. Without it every poll
+// fired objectWillChange whether or not a single field had moved.
+struct DishData: Decodable, Sendable, Equatable {
     var state: LinkState = .offline
     var signalScore: Int = 0
 
@@ -251,7 +254,12 @@ extension DishData {
 // and the offline state are what the UI gates on; a zero here is visibly a
 // zero.
 extension DishData {
+    /// Contract version the app understands. Must match `DashboardSchemaVersion`
+    /// in dashboard.go; scripts/check-contract.sh enforces it.
+    static let expectedSchema = 1
+
     enum CodingKeys: String, CodingKey {
+        case schemaVersion
         case state, signalScore, uptimeHours, boots, hardwareShort, deviceId, firmware
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
@@ -262,10 +270,31 @@ extension DishData {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         var d = DishData()
+
+        // Two keys are strict; everything else is lenient. The split is not
+        // arbitrary.
+        //
+        // `schemaVersion` and `state` are the ones where a wrong value corrupts
+        // meaning rather than detail. A missing or unknown `state` used to fall
+        // back to `.offline` inside a `try?`, so a Go side that renamed a case
+        // or added one — "Booting", say — rendered fresh, correct metrics under
+        // an Offline header with a footer reading live, and nothing anywhere
+        // reported a problem. Failing the decode makes AppState keep its last
+        // good snapshot and say why.
+        //
+        // The metrics stay lenient because zero genuinely means "no reading"
+        // for them, and because an additive change must not break an older app.
+        let version = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+        guard version == DishData.expectedSchema else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion, in: c,
+                debugDescription: "helper speaks dashboard schema \(version), this app expects \(DishData.expectedSchema)")
+        }
+
         func s<T: Decodable>(_ k: CodingKeys, _ fallback: T) -> T {
             (try? c.decodeIfPresent(T.self, forKey: k)) .flatMap { $0 } ?? fallback
         }
-        d.state = s(.state, d.state)
+        d.state = try c.decode(LinkState.self, forKey: .state)
         d.signalScore = s(.signalScore, d.signalScore)
         d.uptimeHours = s(.uptimeHours, d.uptimeHours)
         d.boots = s(.boots, d.boots)

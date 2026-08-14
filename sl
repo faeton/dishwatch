@@ -359,15 +359,24 @@ dash() {
       @sh "PREV_ENERGY=\(.energyWh // 0)",
       @sh "PREV_LAST_CUR=\(.lastCurrent // "")",
       @sh "PREV_OBS_TS=\(.obsStartTs // "")",
-      @sh "PREV_OBS_UP=\(.obsStartUptime // "")"' "$SL_STATE" 2>/dev/null || true)"
+      @sh "PREV_OBS_UP=\(.obsStartUptime // "")",
+      @sh "PREV_OBS_SEC=\(.obsSeconds // 0)"' "$SL_STATE" 2>/dev/null || true)"
   fi
 
   local ENERGY_WH="$PREV_ENERGY" LAST_CUR="$PREV_LAST_CUR"
   local OBS_START_TS="$PREV_OBS_TS" OBS_START_UP="$PREV_OBS_UP"
+  # obsSeconds counts the powerIn samples actually folded into energyWh. It is
+  # the denominator the Go side divides by; carrying it here is not optional
+  # bookkeeping, because dropping the field on a bash write would leave the Go
+  # dashboard with a total and no honest way to average it.
+  local OBS_SEC="${PREV_OBS_SEC:-0}"
   local reboot=0
+  # Mirrors state.IsRestart on the Go side. Two rules: five seconds of slack so
+  # a rounded-down uptime report does not wipe every accumulator, and a halving
+  # rule so a dish that reboots after a few seconds of uptime is still caught.
   if [[ -z "$PREV_BOOTS" ]]; then reboot=1
   elif [[ "$BOOTS" != "$PREV_BOOTS" ]]; then reboot=1
-  elif [[ -n "$PREV_UPS" ]] && (( UPS < PREV_UPS )); then reboot=1
+  elif [[ -n "$PREV_UPS" ]] && (( UPS < PREV_UPS - 5 || UPS * 2 < PREV_UPS )); then reboot=1
   fi
 
   if (( HIST_LEN > 0 )); then
@@ -385,6 +394,7 @@ dash() {
       ENERGY_WH=$(awk "BEGIN{printf \"%.4f\", ($boot_j)/3600}")
       OBS_START_TS=$(( NOW_TS - nb ))
       OBS_START_UP=$(( UPS - nb )); (( OBS_START_UP < 0 )) && OBS_START_UP=0
+      OBS_SEC=$nb
       LAST_CUR=$CUR_IDX
     elif [[ -n "$LAST_CUR" ]]; then
       local delta=$(( CUR_IDX - LAST_CUR ))
@@ -394,12 +404,45 @@ dash() {
           .dishGetHistory.powerIn as $p |
           [ range($cur - $d; $cur) | $p[((. % $len) + $len) % $len] | select(type=="number") ] | add // 0')
         ENERGY_WH=$(awk "BEGIN{printf \"%.4f\", $ENERGY_WH + ($add_j)/3600}")
+        # -1 means the total predates the counter; adding to it would divide
+        # hours of pre-migration energy by a few fresh seconds. Stays unknown
+        # until the next reboot. Mirrors ObsSecondsUnknown on the Go side.
+        (( OBS_SEC >= 0 )) && OBS_SEC=$(( OBS_SEC + delta ))
         LAST_CUR=$CUR_IDX
       elif (( delta > HIST_LEN )); then
         # Gap longer than the ring — lost samples; keep accumulator, skip ahead.
+        # obsSeconds deliberately does not advance: the time passed but we hold
+        # no samples for it, and counting it would dilute the average.
+        LAST_CUR=$CUR_IDX
+      elif (( delta < 0 )); then
+        # Cursor went backwards without a reboot. Resync, fold nothing —
+        # same as integrateEnergy's delta<0 branch on the Go side.
         LAST_CUR=$CUR_IDX
       fi
     else
+      # Snapshot exists but carries no cursor. Bootstrap only when there is no
+      # total to protect; otherwise adopt the cursor and fold nothing, because
+      # we cannot tell how much of the ring the existing total already covers.
+      # Mirrors integrateEnergy — folding here invented energy on the Go side.
+      if awk "BEGIN{exit !(${ENERGY_WH:-0} == 0)}"; then
+        local nb0=$UPS
+        (( nb0 > HIST_LEN )) && nb0=$HIST_LEN
+        (( nb0 > CUR_IDX )) && nb0=$CUR_IDX
+        local boot_j0=0
+        if (( nb0 > 0 )); then
+          boot_j0=$(echo "$HIST_JSON" | jq -r --argjson cur "$CUR_IDX" --argjson len "$HIST_LEN" --argjson n "$nb0" '
+            .dishGetHistory.powerIn as $p |
+            [ range($cur - $n; $cur) | $p[((. % $len) + $len) % $len] | select(type=="number") ] | add // 0')
+        fi
+        ENERGY_WH=$(awk "BEGIN{printf \"%.4f\", ($boot_j0)/3600}")
+        OBS_SEC=$nb0
+        [[ -z "$OBS_START_TS" ]] && OBS_START_TS=$(( NOW_TS - nb0 ))
+        [[ -z "$OBS_START_UP" ]] && OBS_START_UP=$(( UPS - nb0 ))
+      else
+        # A total we cannot account for: adopt the cursor, fold nothing, and
+        # mark the window unknown so no average is offered this epoch.
+        OBS_SEC=-1
+      fi
       LAST_CUR=$CUR_IDX
       [[ -z "$OBS_START_TS" ]] && OBS_START_TS=$NOW_TS
       [[ -z "$OBS_START_UP" ]] && OBS_START_UP=$UPS
@@ -409,6 +452,8 @@ dash() {
   [[ -z "$OBS_START_TS" ]] && OBS_START_TS=$NOW_TS
   [[ -z "$OBS_START_UP" ]] && OBS_START_UP=$UPS
   [[ -z "$LAST_CUR" ]] && LAST_CUR=0
+  [[ -z "$OBS_SEC" ]] && OBS_SEC=0
+  (( OBS_START_UP < 0 )) && OBS_START_UP=0
 
   # Snapshot + log transitions
   local snap; snap=$(jq -cn \
@@ -417,7 +462,8 @@ dash() {
     --arg ready_all "$READY_ALL" --argjson ping "$PING" --argjson drop "$DROP" \
     --argjson energyWh "$ENERGY_WH" --argjson lastCurrent "$LAST_CUR" \
     --argjson obsStartTs "$OBS_START_TS" --argjson obsStartUptime "$OBS_START_UP" \
-    '{ts:$ts, boots:($boots|tonumber), uptimeS:($uptimeS|tonumber), state:$state, disable:$disable, alerts:$alerts, ready_all:$ready_all, ping:$ping, drop:$drop, energyWh:$energyWh, lastCurrent:$lastCurrent, obsStartTs:$obsStartTs, obsStartUptime:$obsStartUptime}')
+    --argjson obsSeconds "$OBS_SEC" \
+    '{ts:$ts, boots:($boots|tonumber), uptimeS:($uptimeS|tonumber), state:$state, disable:$disable, alerts:$alerts, ready_all:$ready_all, ping:$ping, drop:$drop, energyWh:$energyWh, lastCurrent:$lastCurrent, obsStartTs:$obsStartTs, obsStartUptime:$obsStartUptime, obsSeconds:$obsSeconds}')
   _sl_diff_and_log "$snap" || true
   _sl_unlock
   # ---- end state transaction ----
@@ -631,16 +677,32 @@ dash() {
         "$C_LBL" "$C_WARN" "$(spark "$pw" "")" "$R" "$C_DIM" "$pw_now" "$pw_avg" "$pw_max" "$R"
     fi
     # ---------- energy since boot (integrated from powerIn) ----------
+    local fmt_dur
+    fmt_dur() { awk -v s="$1" 'BEGIN{h=int(s/3600); m=int((s%3600)/60); sec=int(s%60);
+      if(h>0) printf "%dh%02dm",h,m; else if(m>0) printf "%dm%02ds",m,sec; else printf "%ds",sec}'; }
     if awk "BEGIN{exit !(${ENERGY_WH:-0} > 0)}"; then
-      local obs_dur=$(( NOW_TS - OBS_START_TS ))
-      (( obs_dur < 1 )) && obs_dur=1
+      # The denominator is the count of samples actually integrated, never
+      # elapsed wall clock. A gap wider than the ring advances the cursor
+      # without contributing energy, so `NOW_TS - OBS_START_TS` grows while
+      # ENERGY_WH does not, and the average collapses — a 20 W dish left
+      # unwatched for nine hours read "avg 0.4 W", and by then the elapsed
+      # window had grown to roughly the uptime, so it also passed the coverage
+      # test below and printed as a confident "since boot" figure.
+      #
+      # OBS_SEC of -1 means the total predates the counter (see the Go side's
+      # ObsSecondsUnknown): there is no honest average, so quote neither it nor
+      # the extrapolation.
+      local obs_dur="$OBS_SEC"
       local energy_fmt avg_w_obs est_wh
       energy_fmt=$(awk "BEGIN{printf \"%.2f\", $ENERGY_WH}")
+      if (( obs_dur < 1 )); then
+        local up_str_only; up_str_only=$(fmt_dur "$UPS")
+        printf '  %sEnergy%s %s%s Wh%s  %sover %s%s\n' \
+          "$C_LBL" "$R" "$C_VAL" "$energy_fmt" "$R" "$C_DIM" "$up_str_only" "$R"
+        avg_w_obs=0
+      else
       avg_w_obs=$(awk "BEGIN{printf \"%.1f\", $ENERGY_WH*3600/$obs_dur}")
       est_wh=$(awk "BEGIN{printf \"%.1f\", $ENERGY_WH*$UPS/$obs_dur}")
-      local fmt_dur
-      fmt_dur() { awk -v s="$1" 'BEGIN{h=int(s/3600); m=int((s%3600)/60); sec=int(s%60);
-        if(h>0) printf "%dh%02dm",h,m; else if(m>0) printf "%dm%02ds",m,sec; else printf "%ds",sec}'; }
       local obs_str up_str
       obs_str=$(fmt_dur "$obs_dur")
       up_str=$(fmt_dur "$UPS")
@@ -650,6 +712,7 @@ dash() {
       else
         printf '  %sEnergy%s %s%s Wh%s  %sobs %s @ %s W · est %s Wh over %s%s\n' \
           "$C_LBL" "$R" "$C_VAL" "$energy_fmt" "$R" "$C_DIM" "$obs_str" "$avg_w_obs" "$est_wh" "$up_str" "$R"
+      fi
       fi
 
       # ---------- power-bank depletion estimate ----------
@@ -677,6 +740,9 @@ dash() {
         local anchor_age=$(( NOW_TS - anchor_ts ))
         anchor_source=$(printf 'anchor %s%% set %s ago' "$anchor_pct" "$(fmt_dur "$anchor_age")")
       else
+        # Same rule: scale by observed samples, not elapsed time, or the burn
+        # is understated by however long we were not watching — which reads as
+        # a fuller bank than there is.
         pb_used_wh=$(awk "BEGIN{printf \"%.2f\", $ENERGY_WH*$UPS/$obs_dur}")
         pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $SL_PB_START_PCT - $pb_used_wh*100/$pb_cap}")
         pb_start_pct="$SL_PB_START_PCT"

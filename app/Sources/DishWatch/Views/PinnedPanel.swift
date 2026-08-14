@@ -56,7 +56,9 @@ final class PinnedPanelController {
 private struct PinnedRoot: View {
     @EnvironmentObject var store: AppState
     var body: some View {
-        CompactWidget(d: store.data, onClose: { store.pinnedWidget = false })
+        CompactWidget(d: store.data,
+                      onClose: { store.pinnedWidget = false },
+                      quality: store.quality)
             .fixedSize()
             .environment(\.colorScheme, .dark)
     }
