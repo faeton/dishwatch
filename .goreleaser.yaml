@@ -37,6 +37,12 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # The DMG is not a goreleaser artifact, so it is absent from checksums.txt
+  # unless named here — and the Homebrew cask needs the SHA of the exact file
+  # that was uploaded. Without this the cask's sha256 has to be computed by
+  # hand from a file nobody can verify was the published one.
+  extra_files:
+    - glob: app/.build/DishWatch-{{ .Version }}.dmg
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -82,5 +88,10 @@ release:
   # it AFTER tagging: the bundle version comes from `git describe`, so a DMG
   # built before the tag carries the previous version in its name, its
   # Info.plist and its notarization.
+  # Version-exact, not a wildcard. `DishWatch-*.dmg` matched any stale image
+  # left in .build — there is a 0.1.2 DMG sitting there right now — so a
+  # release could silently ship the previous version's app, or ship it
+  # *alongside* the right one. A missing correctly-versioned DMG now fails the
+  # release instead.
   extra_files:
-    - glob: app/.build/DishWatch-*.dmg
+    - glob: app/.build/DishWatch-{{ .Version }}.dmg

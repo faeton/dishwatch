@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/faeton/dishwatch/internal/ui"
@@ -44,15 +45,33 @@ func runRaw(ctx context.Context, reqJSON string) error {
 	return nil
 }
 
-// runSpeed does a Mac-side speedtest: LAN ping to the dish + macOS
-// `networkQuality`. The dish-side speedtest RPC needs auth we can't do from
-// an unauthenticated CLI.
+// pingArgs builds the ping invocation for the host platform, because `-W`
+// means different units on each and getting it wrong is not cosmetic.
+//
+// On macOS `-W` is the per-reply wait in MILLISECONDS; on Linux and the BSDs
+// it is SECONDS. The single hardcoded `-W 1000` this replaces was written for
+// macOS, so on Linux it asked for a 1000-second wait per probe: `sl speed`
+// against an unreachable dish appeared to hang indefinitely rather than
+// failing in about a second.
+func pingArgs() []string {
+	args := []string{"-c", "10", "-q", "-i", "0.2"}
+	if runtime.GOOS == "darwin" {
+		args = append(args, "-W", "1000") // ms
+	} else {
+		args = append(args, "-W", "1") // s
+	}
+	return append(args, "192.168.100.1")
+}
+
+// runSpeed measures from this machine: LAN ping to the dish, plus macOS
+// `networkQuality` where it exists. The dish-side speedtest RPC needs auth we
+// can't do from an unauthenticated CLI.
 func runSpeed(ctx context.Context) error {
-	fmt.Printf("%sStarlink speed test (Mac-side — dish-side API requires auth we can't do from shell)%s\n\n",
+	fmt.Printf("%sStarlink speed test (measured from this machine — the dish-side API requires auth we can't do from a shell)%s\n\n",
 		ui.Hdr, ui.Rst)
 
 	fmt.Printf("%s[1/2] LAN RTT to dish (192.168.100.1)%s\n", ui.Hdr, ui.Rst)
-	out, err := exec.CommandContext(ctx, "ping", "-c", "10", "-q", "-i", "0.2", "-W", "1000", "192.168.100.1").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "ping", pingArgs()...).CombinedOutput()
 	if err != nil {
 		fmt.Printf("      %sping failed: %v%s\n\n", ui.Err, err, ui.Rst)
 	} else {
