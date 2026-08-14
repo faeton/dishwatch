@@ -24,6 +24,11 @@ env:
   HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
   HOMEBREW_NO_ANALYTICS: 1
   HOMEBREW_NO_AUTO_UPDATE: 1
+  # `brew audit --online` resolves GitHub URLs, and unauthenticated runners get
+  # 60 requests an hour shared across the whole IP — which a single audit run
+  # exhausts. The runner's own token lifts it; without this the job fails on
+  # rate limits rather than on anything wrong with the tap.
+  HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   audit:
@@ -96,10 +101,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Homebrew/actions/setup-homebrew@master
+      # No staging: setup-homebrew already symlinks this checkout in as
+      # faeton/tap, so the tap-qualified name resolves as-is. Copying over that
+      # path is what broke the two previous attempts — first nesting the repo
+      # inside itself, then leaving a real directory where the action's
+      # post-job cleanup expected the symlink it had made. And a formula cannot
+      # be installed from a bare path at all; Homebrew requires it to be in a
+      # tap.
       - name: install the CLI on Linux and run it
         run: |
-          dest="$(brew --repository)/Library/Taps/faeton/homebrew-tap"
-          mkdir -p "$(dirname "$dest")"; cp -R "$GITHUB_WORKSPACE" "$dest"
           brew install faeton/tap/dishwatch
           dishwatch --version
           sl --version
+          sl --help >/dev/null

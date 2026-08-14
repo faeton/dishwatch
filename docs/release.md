@@ -260,11 +260,9 @@ runs to the notary and stops only on the absent credential.
 
 ## Still unverified
 
-**Gatekeeper on a machine that has never seen this app.** `verify-release`
-quarantines its copy, which is closer than assessing the build tree, but this
-Mac still has policy caches and has launched these binaries. The stapled ticket
-means it should also pass offline; that has not been tested with the network
-down.
+**First launch with the network down.** The stapled ticket should make an
+offline first launch work; that has not been tested with the network actually
+unplugged, and it is the case this project's users are most likely to hit.
 
 **Local Network TCC on a clean account.** The real-identity half is now done:
 the notarized DMG installed to /Applications and connected to the dish with no
@@ -276,10 +274,27 @@ roadmap.md Phase 2 for the full evidence and its limits.
 **Intel.** The binaries are universal and `lipo` confirms both slices, but
 nothing here has executed the x86_64 slice.
 
-**The formula on Linux.** Its `on_linux` block has shipped since v0.1.0 and has
-never been installed anywhere. The tap CI added in this release does that for
-the first time; its first run is the first evidence either way.
+**Cask upgrade.** Install and Gatekeeper assessment are covered; `upgrade` has
+never run, because there is no earlier cask version to upgrade from. Same for
+`--zap` uninstall, whose paths are a best guess until `brew generate-zap` is
+run against a real launched install.
 
-**The cask on a second machine.** Install, upgrade and `--zap` uninstall were
-exercised here only, on the machine that built it. Upgrade in particular has
-never run — there is no previous cask version to upgrade from.
+## Settled by the tap CI, 2026-08-14
+
+**Gatekeeper on a machine that has never seen the app.** A `macos-15` runner —
+fresh, no policy cache, no prior launch — installed the cask, which downloads
+and quarantines the DMG, and `spctl` returned `accepted`. That is the
+clean-machine check this document said could not be done locally.
+
+**The formula on Linux.** Its `on_linux` block had shipped since v0.1.0 without
+ever being installed anywhere. It installs: `dishwatch` and `sl` both report
+0.1.3 on ubuntu-latest and `sl --help` runs.
+
+Getting there took four attempts, all of them the CI's fault rather than the
+tap's, and worth recording so nobody repeats them: `brew style` failed on a
+100-character formula description (over Homebrew's 80 limit, shipped that way
+since v0.1.0); `brew audit --online` exhausted the runner's 60 unauthenticated
+GitHub requests; and the Linux job fought `setup-homebrew` over the tap
+directory twice — nesting the repo inside itself, then leaving a real directory
+where the action's cleanup expected its own symlink. The action already
+symlinks the checkout in as the tap, so the correct amount of staging is none.
