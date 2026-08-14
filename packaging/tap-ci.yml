@@ -1,0 +1,97 @@
+# Copy to faeton/homebrew-tap:.github/workflows/ci.yml
+#
+# The tap has no CI at all today, so a malformed cask or a stale sha256 is
+# discovered by whoever runs `brew install` first. Everything here is cheap and
+# catches the failures that actually happen: a SHA that no longer matches the
+# uploaded asset, a URL that 404s after a retagged release, and style/audit
+# violations that make `brew audit` reject the tap.
+name: tap
+
+on:
+  push:
+  pull_request:
+  # The cask points at a GitHub release asset that is edited by a separate
+  # repo's release process. A weekly run catches a DMG replaced or removed
+  # after the cask was merged, which no push to this repo would ever surface.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tap this checkout
+        run: |
+          # Audit the working copy, not whatever is already installed.
+          brew tap-new faeton/tap --no-git 2>/dev/null || true
+          dest="$(brew --repository faeton/tap)"
+          rm -rf "$dest"
+          mkdir -p "$(dirname "$dest")"
+          cp -R "$GITHUB_WORKSPACE" "$dest"
+
+      - run: brew style faeton/tap
+
+      # --online fetches the URL and verifies the checksum, which is the whole
+      # point: a cask whose sha256 does not match the published DMG installs
+      # nowhere, and nothing else here would notice.
+      - name: audit casks
+        run: |
+          shopt -s nullglob
+          for f in Casks/*.rb; do
+            token="$(basename "$f" .rb)"
+            brew audit --cask --online --strict "faeton/tap/$token"
+          done
+
+      - name: audit formulae
+        run: |
+          shopt -s nullglob
+          for f in Formula/*.rb; do
+            name="$(basename "$f" .rb)"
+            brew audit --formula --online --strict "faeton/tap/$name" || true
+          done
+
+  install:
+    runs-on: macos-15
+    needs: audit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tap this checkout
+        run: |
+          dest="$(brew --repository faeton/tap)"
+          rm -rf "$dest"; mkdir -p "$(dirname "$dest")"
+          cp -R "$GITHUB_WORKSPACE" "$dest"
+
+      # A cask install is where quarantine and notarization are actually
+      # exercised. `spctl` afterwards is the check that matters — Homebrew will
+      # happily install an app Gatekeeper then refuses to launch.
+      - name: install the app cask and assess it
+        run: |
+          if [ ! -f Casks/dishwatch-app.rb ]; then echo "no cask yet, skipping"; exit 0; fi
+          brew install --cask faeton/tap/dishwatch-app
+          app="/Applications/DishWatch.app"
+          test -d "$app" || { echo "cask installed no app at $app" >&2; exit 1; }
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          echo "  archs: $(lipo -archs "$app/Contents/MacOS/DishWatch")"
+          echo "  helper: $(lipo -archs "$app/Contents/MacOS/dishwatch-helper")"
+          brew uninstall --cask faeton/tap/dishwatch-app
+
+  formula-linux:
+    # The formula claims Linux support in its on_linux block and nothing has
+    # ever installed it there.
+    runs-on: ubuntu-latest
+    needs: audit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Homebrew/actions/setup-homebrew@master
+      - name: install the CLI on Linux and run it
+        run: |
+          dest="$(brew --repository)/Library/Taps/faeton/homebrew-tap"
+          mkdir -p "$(dirname "$dest")"; cp -R "$GITHUB_WORKSPACE" "$dest"
+          brew install faeton/tap/dishwatch
+          dishwatch --version
+          sl --version
