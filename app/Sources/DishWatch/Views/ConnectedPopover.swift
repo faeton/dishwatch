@@ -127,11 +127,28 @@ struct ConnectedPopover: View {
                 MetricCell(label: "Ping", value: "\(Int(d.pingMs))", unit: "ms",
                            sub: "drop \(String(format: "%.1f", d.dropPct))% · \(d.noiseOK ? "noise ✓" : "noise ✗")")
                 MetricCell(label: "Power", value: String(format: "%.1f", d.powerW), unit: "W",
-                           sub: energyLine, subHelp: energyCellHelp)
+                           sub: powerSub)
             }
         }
         .background(Color.white.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// The Power cell's sub-label: the session peak, not an energy total.
+    ///
+    /// Energy lived here for two releases and did not belong. The cell is where
+    /// you look for *watts now*, it is half a popover wide — the honest
+    /// three-case energy string overflowed it and shipped truncated as
+    /// `115.1 Wh over 3h 44m · 30....` — and once the Observed block grew its
+    /// own energy figure the two sat a few points apart showing near-identical
+    /// numbers over subtly different windows. No amount of tooltip fixes that;
+    /// the second number was the problem.
+    ///
+    /// The peak is a fact nothing else on screen shows. `energyLine` remains as
+    /// the cold-start fallback, before there is an Observed block to carry it.
+    private var powerSub: String {
+        if let o = d.observed { return "peak \(String(format: "%.1f", o.powerPeak)) W" }
+        return energyLine
     }
 
     /// The energy total, said only as strongly as the samples allow.
@@ -155,30 +172,9 @@ struct ConnectedPopover: View {
         return "\(wh) Wh measured"
     }
 
-    /// Spells out the window under the Power cell's total, which the cell has
-    /// no room to state and which differs from the Observed block's.
-    private var energyCellHelp: String {
-        let wh = String(format: "%.1f", d.energyWhSinceBoot)
-        if d.energyCoversBoot {
-            return "\(wh) Wh drawn since the dish last booted, from samples covering essentially the whole of it."
-        }
-        if d.energyAvgW > 0, d.energySeconds > 0 {
-            return """
-            \(wh) Wh measured across \(Self.span(Int(d.energySeconds))) of samples — \
-            not the whole boot, because energy only accumulates while DishWatch is \
-            retrieving readings. The true since-boot figure is higher.
-            """
-        }
-        return """
-        \(wh) Wh measured. How long that covers is not known for this boot, so no \
-        average is offered — the sample count and the total disagree, and the next \
-        reboot resets both.
-        """
-    }
 
     /// Test seam for `energyLine`, which is private and not a `View`.
     var energyLineForTesting: String { energyLine }
-    var energyCellHelpForTesting: String { energyCellHelp }
     func energyHelpForTesting(_ o: ObservedStats) -> String { energyHelp(o) }
 
     private var sparklines: some View {
@@ -291,7 +287,17 @@ struct ConnectedPopover: View {
                     // renders in full colour and breaks a line that is
                     // otherwise uniformly dimmed. As a symbol it inherits the
                     // foreground style, like the arrows beside it.
-                    (Text(Image(systemName: "bolt.fill")) + Text(" \(Self.wh(o.energyWh))"))
+                    // The window is stated inline rather than left to the
+                    // heading or to a tooltip. `.help` does not reliably fire
+                    // inside a `MenuBarExtra(.window)` panel — it is not
+                    // key/activating, so AppKit's tooltip tracking mostly does
+                    // not run — and "hovering doesn't explain anything" is how
+                    // that was found. The heading does scope the whole block,
+                    // but twice now that has not been the connection a reader
+                    // makes, and one short phrase is a cheap way to stop
+                    // needing them to.
+                    (Text(Image(systemName: "bolt.fill"))
+                     + Text(" \(Self.wh(o.energyWh)) in \(Self.dur(o.seconds))"))
                         .help(energyHelp(o))
                     Spacer(minLength: 0)
                 }
@@ -471,10 +477,6 @@ struct MetricCell: View {
     var value: String
     var unit: String
     var sub: String? = nil
-    /// Tooltip for the sub-label. Optional because most sub-labels restate
-    /// something already on screen; the energy one names a window that is not
-    /// written anywhere in the cell.
-    var subHelp: String? = nil
     var barFrac: Double? = nil
     var barColor: Color = DW.down
 
@@ -494,7 +496,6 @@ struct MetricCell: View {
                 .frame(height: 3).padding(.top, 7)
             } else if let sub {
                 Text(sub).font(.system(size: 11)).foregroundStyle(DW.textA(0.45)).padding(.top, 6)
-                    .help(subHelp ?? "")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

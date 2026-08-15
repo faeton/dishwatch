@@ -274,6 +274,41 @@ it; rejected. `BatteryPopover`'s runtime estimate is derived from accumulated
 Wh, so the energy total earns its place in the battery UI. Session watts go in
 the grid sub-label and footer instead.
 
+## Tooltips are not a place to put information
+
+`.help()` does not reliably fire inside the `MenuBarExtra(.window)` panel. It is
+non-activating, so AppKit's tooltip tracking mostly does not run, and a hover
+produces nothing. Found the way these things are always found — "hovering over
+115wh doesnt explain anything" — after two figures were given careful
+explanatory tooltips that no user could ever have seen.
+
+Consequences, in order of importance:
+
+- **Anything a reader needs must be visible.** The Observed block's energy
+  states its own window inline (`⚡ 53 Wh in 2h 14m`) rather than relying on the
+  heading above it or on a hover. The heading does scope the block, but twice
+  that was not the connection a reader made, and one short phrase costs less
+  than needing them to.
+- The `.help` calls that remain are a bonus for wherever the platform does
+  deliver them, never the only copy of a fact. The one on the Observed block
+  that this document calls load-bearing has, on that evidence, probably never
+  rendered.
+- Tooltips on `Button`s — *Unpin*, *Settings & quit* — and on the status item
+  itself do work; those are AppKit controls with their own tracking areas.
+
+## Two energy figures became one
+
+The Power cell carried an energy total for two releases and should not have.
+The cell answers *watts now*; it is half a popover wide, so the honest
+three-case energy string overflowed it and shipped truncated as
+`115.1 Wh over 3h 44m · 30....`; and once the Observed block grew its own energy
+figure the two sat a few points apart showing near-identical numbers over subtly
+different windows.
+
+The second number was the problem, so it is gone. The cell shows `peak %.1f W`
+from the session — a fact nothing else on screen states — and falls back to the
+energy line only at cold start, before there is an Observed block to carry it.
+
 ## The menu-bar readout
 
 The status item draws a **glyph** and a **readout**. They are independent

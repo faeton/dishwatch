@@ -477,34 +477,7 @@ extension EnergyLineTests {
 }
 
 extension EnergyLineTests {
-    private func cellHelp(_ d: DishData) -> String {
-        ConnectedPopover(d: d, showSettings: .constant(false)).energyCellHelpForTesting
-    }
 
-    /// Both tooltips exist to answer one question — *used over how long?* — so
-    /// each must actually name a duration, and neither may imply the other's
-    /// window. Two watt-hour figures a few points apart is the confusion this
-    /// text is paying for.
-    func testEnergyTooltipNamesItsWindow() {
-        var d = DishData.sample
-        d.energyWhSinceBoot = 251.9
-        d.energyCoversBoot = false
-        d.energySeconds = 10_800
-        d.energyAvgW = 30.1
-        let partial = cellHelp(d)
-        XCTAssertTrue(partial.contains("3h"), "must say how long it covers: \(partial)")
-        XCTAssertTrue(partial.contains("higher"), "must say the real since-boot figure exceeds it")
-
-        d.energyCoversBoot = true
-        XCTAssertTrue(cellHelp(d).contains("since the dish last booted"))
-
-        // No denominator: it must say so rather than invent one.
-        d.energyCoversBoot = false
-        d.energyAvgW = 0
-        let unknown = cellHelp(d)
-        XCTAssertTrue(unknown.contains("not known"), unknown)
-        XCTAssertFalse(unknown.contains("average is offered."), "no average may be quoted")
-    }
 
     /// The Observed block's own tooltip, which must name that block's window and
     /// point at the other figure so the two are not read as one.
