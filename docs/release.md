@@ -246,6 +246,26 @@ The tag-before-notarize rule this document opens with did its job silently:
 `CFBundleShortVersionString` and its notarization, because the tag was pushed
 first. Nothing had to be rebuilt.
 
+### The tap goes red between the formula push and the cask push
+
+Expect one failing tap CI run per release, and do not go looking for a bug in
+it. `make publish` creates the GitHub release and pushes the formula in the same
+goreleaser step; the cask is a separate manual commit that cannot be made any
+earlier, because its `sha256` is the hash of a DMG that only exists once
+notarization has finished. So there is always a window where the tap's cask says
+the old version while `livecheck` can already see the new release, and
+`brew audit` correctly refuses it:
+
+```
+Version '0.1.3' differs from '0.2.0' retrieved by livecheck.
+```
+
+Here the window was 2m16s and the next run was green. It cannot be closed by
+reordering — pushing the cask first would fail the other way, on a `url` that
+404s until the release exists. The fix, if it is ever worth one, is to teach the
+audit job to tolerate a cask that trails the newest release by one version, or
+to have `make publish` do the cask commit itself.
+
 One thing to know for next time: the Homebrew-managed tap checkout at
 `/opt/homebrew/Library/Taps/faeton/homebrew-tap` had unrelated uncommitted edits
 (another project's cask, plus a formula description fix that goreleaser has since
