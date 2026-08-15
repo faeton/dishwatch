@@ -87,7 +87,17 @@ struct HardwareChip: View {
     var model: String
     var aim: DishAim
 
-    private var hasModel: Bool { !model.isEmpty && model != "?" }
+    /// Whether there is a model to draw at all.
+    ///
+    /// Static and internal because callers need it *before* they lay the chip
+    /// out: an `if` inside this view makes the chip draw nothing, but padding
+    /// applied to it at the call site is still padding, so an unknown dish left
+    /// a blank band where the chip would have been. The rule has to be asked
+    /// once and answered the same way in both places — `"?"` is what
+    /// `DishData` defaults to and what an offline snapshot carries.
+    static func hasModel(_ model: String) -> Bool { !model.isEmpty && model != "?" }
+
+    private var hasModel: Bool { Self.hasModel(model) }
 
     var body: some View {
         if hasModel {
@@ -105,9 +115,12 @@ struct HardwareChip: View {
                     .foregroundStyle(DW.textA(0.55))
                 }
             }
-            // Never truncates: the panel is a fixed width and this string grows
-            // with the model name, so it shrinks a point rather than becoming
-            // "Standard Gen2 · Self-aim…".
+            // Shrinks before it truncates. Not a guarantee that it *never*
+            // truncates — the model is whatever string the dish reports, and a
+            // long enough one runs out of column even at 82%. It is a
+            // guarantee that the ordinary long case (`Standard Gen3 ·
+            // Self-aiming`, ~185 pt against the hero's ~270) stays whole, which
+            // is what the header placement could not manage.
             .lineLimit(1)
             .minimumScaleFactor(0.82)
             .padding(.horizontal, 8).padding(.vertical, 3.5)

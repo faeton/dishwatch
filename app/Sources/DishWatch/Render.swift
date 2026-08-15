@@ -44,6 +44,35 @@ enum Render {
         var battery = DishData.sample; battery.onBattery = true; battery.bankAnchored = true
 
         snap(ConnectedPopover(d: store.data, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
+        // The panel at its *widest* identity, which is the ordinary one.
+        // `DishData.sample` carries `Mini` and `mini1_panda` — shorter than
+        // anything a real dish reports — and that is why the hardware chip
+        // shipped one release truncated to `Standard… · Self-a…` in the header
+        // while every screenshot here looked fine. A shot of the long strings is
+        // the only thing that makes a layout regression visible before a user
+        // sees it.
+        var long = DishData.sample
+        long.hardwareShort = "Standard Gen3"
+        long.hardwareAim = .motorized
+        long.deviceId = "ut01000000-00000000-00ed07ca"
+        long.firmware = "2026.04.07.mr77639.1"
+        long.boots = 1326
+        long.uptimeHours = 0.7
+        snap(ConnectedPopover(d: long, showSettings: .constant(false)).environmentObject(store)
+                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "connected-long")
+        // And at its *emptiest* identity: `"?"` is what DishData defaults to and
+        // what an offline snapshot carries, so the chip and the backdrop both
+        // draw nothing. The case exists because "draws nothing" is not the same
+        // as "takes no space" — padding applied to an absent view at the call
+        // site is still padding, and the failure it produces is a blank band
+        // that no assertion would catch and no other shot would show.
+        var unknown = DishData.sample
+        unknown.hardwareShort = "?"
+        unknown.hardwareAim = .unknown
+        snap(ConnectedPopover(d: unknown, showSettings: .constant(false)).environmentObject(store)
+                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "connected-unknown")
         snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
         snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
         snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")

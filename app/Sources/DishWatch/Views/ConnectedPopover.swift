@@ -81,21 +81,21 @@ struct ConnectedPopover: View {
         }
     }
 
-    /// Title row, and the width beside it spent on *which dish this is*.
+    /// Title row: brand, clock, gear.
     ///
-    /// The chip sits here rather than in the hero because the hero's lines are
-    /// about this session — uptime, boots, firmware — and the hardware is not.
-    /// It is the one fact on screen that never changes between polls, and the
-    /// empty run between the app name and the clock was the only place with
-    /// room for a picture of it.
+    /// The hardware chip was here for one release and did not fit. The run
+    /// between the app name and the clock measures ~145 pt and the chip needs
+    /// ~185 for a real dish, so it shipped as `Standard… · Self-a…` — the two
+    /// halves of the one fact it exists to state, both cut. It looked fine only
+    /// against `DishData.sample`, whose `Mini` and `mini1_panda` are shorter
+    /// than anything a real dish reports; see the `connected-long` harness case,
+    /// which exists so this cannot pass a screenshot again.
     private var header: some View {
         HStack {
             HStack(spacing: 8) {
                 SignalBars(color: DW.cyan, height: 13, barWidth: 3, fraction: Double(d.signalScore) / 100)
                 Text("DishWatch").font(.system(size: 14, weight: .bold))
             }
-            Spacer(minLength: 8)
-            HardwareChip(model: d.hardwareShort, aim: d.hardwareAim)
             Spacer(minLength: 8)
             HStack(spacing: 10) {
                 Text(Date.now, format: .dateTime.hour().minute().second())
@@ -113,22 +113,73 @@ struct ConnectedPopover: View {
                     StatusDot(color: dotColor, pulse: store.hasLoaded && d.state == .connected)
                     Text(heroLabel).font(.system(size: 22, weight: .bold))
                 }
-                // The model used to trail this line. It moved to the header
-                // chip, which says the same word beside a picture of the thing
-                // and has room for the half that was missing — whether the
-                // panel aims itself. Repeating it here would be the only
-                // duplicated fact in the panel.
+                // Identity first, then the session facts. The model used to
+                // trail the uptime line as a bare word, then spent a release in
+                // the header where it did not fit; here it has the panel's full
+                // left column — ~270 pt against the ~185 the longest real chip
+                // needs — so both halves survive, including the one the bare
+                // word never carried: whether the panel aims itself.
+                // Gated here, not only inside the chip: the chip draws nothing
+                // without a model, but this padding would still be padding, and
+                // an unknown or offline dish would get a blank band where the
+                // chip should be.
+                if HardwareChip.hasModel(d.hardwareShort) {
+                    HardwareChip(model: d.hardwareShort, aim: d.hardwareAim)
+                        .padding(.top, 9)
+                }
                 Text("up \(d.uptimeHours, specifier: "%.1f") h · boots \(d.boots)")
                     .font(.system(size: 12.5)).monospacedDigit().foregroundStyle(DW.textA(0.55))
-                    .padding(.top, 7)
-                Text("\(d.deviceId) · fw \(d.firmware)")
+                    .padding(.top, 8)
+                // Two lines, both whole. A real dish reports a 28-character ID
+                // and a 20-character firmware string, and `%@ · fw %@` cannot
+                // hold them: it truncated to `…-00ed07ca · fw 2026.0…`, cutting
+                // the half that changes between releases. Eliding the ID's
+                // middle to save the line was the previous fix and this is a
+                // better one — nothing is abbreviated, and the panel has the
+                // vertical room it did not have horizontally.
+                Text(d.deviceId)
                     .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.38))
-                    .padding(.top, 2)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .textSelection(.enabled)
+                    .padding(.top, 3)
+                Text("fw \(d.firmware)")
+                    .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.38))
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .padding(.top, 1)
             }
             Spacer()
             SignalGauge(score: d.signalScore, size: 78)
         }
         .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 16)
+        .background(alignment: .leading) { dishBackdrop }
+        // The backdrop bleeds past the leading edge by design; without this it
+        // would also bleed into the divider and the metric grid below.
+        .clipped()
+    }
+
+    /// The dish itself, drawn large and faint behind the status block.
+    ///
+    /// Decoration, and the honest kind: it is the same outline the chip carries
+    /// at 15 pt, so it says exactly what the chip says and nothing more. Every
+    /// current model is a flat panel on a stem, differing in size rather than
+    /// shape, so one silhouette is a true picture of whichever one is out
+    /// there — the words beside it are what name the generation.
+    ///
+    /// Gated on there being a model at all, which is the same condition the chip
+    /// draws under. An offline snapshot with no reading has no dish to depict,
+    /// and a decorative one would be the only thing on a dimmed panel still
+    /// claiming to know something.
+    ///
+    /// 7% opacity, no glow: it has to survive being read *through*, and the
+    /// identity lines sitting on it are already the dimmest text on the panel.
+    @ViewBuilder private var dishBackdrop: some View {
+        if HardwareChip.hasModel(d.hardwareShort) {
+            DishGlyph(size: 170, glow: false)
+                .opacity(0.11)
+                .offset(x: -26, y: -4)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     private var metricGrid: some View {
@@ -607,7 +658,12 @@ struct ConnectedPopover: View {
             } label: {
                 HStack {
                     HStack(spacing: 16) {
-                        Text("◎ Aim \(Int(d.azimuthDeg))° / \(Int(d.elevationDeg))°")
+                        // "Pointing", not "Aim". The hardware chip above now
+                        // says "Aim by hand", which is a *capability* — and the
+                        // same verb over a pair of live angles reads as an
+                        // instruction to go set them, or as motors moving to
+                        // them right now. One word, two facts, in one panel.
+                        Text("◎ Pointing \(Int(d.azimuthDeg))° / \(Int(d.elevationDeg))°")
                         Text("⌖ GPS \(d.gpsValid ? "✓" : "✗") \(d.gpsSats)")
                         Text("⎈ \(d.ethMbps) Mbps")
                     }
