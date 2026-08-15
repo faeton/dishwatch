@@ -53,6 +53,16 @@ struct DishData: Decodable, Sendable, Equatable {
     // power
     var powerW: Double = 0
     var energyWhSinceBoot: Double = 0
+    /// Whether the samples behind `energyWhSinceBoot` actually cover this boot.
+    /// The accumulator only integrates samples it retrieved, so after any gap
+    /// the total is an under-count — and calling it "since boot" regardless is
+    /// how a dish that had drawn ~900 Wh displayed "90.3 Wh since boot".
+    var energyCoversBoot: Bool = false
+    /// Seconds of samples integrated into the total, 0 when unknown.
+    var energySeconds: Int64 = 0
+    /// Mean draw across those samples, or 0 when no honest one exists — nothing
+    /// counted yet, or a count and a total that cannot both be true.
+    var energyAvgW: Double = 0
 
     // sparkline series (oldest → newest)
     var pingSeries: [Double] = []
@@ -271,6 +281,7 @@ extension DishData {
         case state, signalScore, uptimeHours, boots, hardwareShort, deviceId, firmware
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
+        case energyCoversBoot, energySeconds, energyAvgW
         case pingSeries, pingAvg, downSeries, downMax, downAvg, upSeries, upAvg, powerSeries, powerAvg
         case seriesSeconds
         case dishAddr, onBattery, bankAnchored, bankPct, bankWh, bankWhLeft, bankSecondsLeft, anchoredAgoText
@@ -324,6 +335,9 @@ extension DishData {
         d.ethMbps = s(.ethMbps, d.ethMbps)
         d.powerW = s(.powerW, d.powerW)
         d.energyWhSinceBoot = s(.energyWhSinceBoot, d.energyWhSinceBoot)
+        d.energyCoversBoot = s(.energyCoversBoot, d.energyCoversBoot)
+        d.energySeconds = s(.energySeconds, d.energySeconds)
+        d.energyAvgW = s(.energyAvgW, d.energyAvgW)
         d.pingSeries = s(.pingSeries, d.pingSeries)
         d.pingAvg = s(.pingAvg, d.pingAvg)
         d.downSeries = s(.downSeries, d.downSeries)
@@ -381,6 +395,7 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
     case up        = "up"
     case signal    = "signal"
     case power     = "power"
+    case energy    = "energy"
     case battery   = "battery"
 
     var id: String { rawValue }
@@ -393,6 +408,7 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
         case .up:        return "Upload"
         case .signal:    return "Signal score"
         case .power:     return "Power draw"
+        case .energy:    return "Energy used"
         case .battery:   return "Battery %"
         }
     }
@@ -402,6 +418,7 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
     var note: String? {
         switch self {
         case .pingSpark: return "redraws every poll"
+        case .energy:    return "total measured this boot"
         case .battery:   return "only on a power bank"
         default:         return nil
         }
@@ -435,6 +452,9 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
         case .up:        return "↑" + Self.compactMbps(d.upMbps)
         case .signal:    return "\(d.signalScore)"
         case .power:     return "\(Int(d.powerW.rounded()))W"
+        // Whole watt-hours: this is a running total, and its tenths change once
+        // a minute at 30 W while costing width in the bar permanently.
+        case .energy:    return d.energyWhSinceBoot > 0 ? "\(Int(d.energyWhSinceBoot.rounded()))Wh" : nil
         // Off a bank there is no percentage to show — and a 0% would read as a
         // flat battery rather than as "not on one".
         case .battery:   return d.bankAnchored ? "\(Int(d.bankPct))%" : nil

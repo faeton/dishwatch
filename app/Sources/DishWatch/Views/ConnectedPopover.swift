@@ -127,12 +127,36 @@ struct ConnectedPopover: View {
                 MetricCell(label: "Ping", value: "\(Int(d.pingMs))", unit: "ms",
                            sub: "drop \(String(format: "%.1f", d.dropPct))% · \(d.noiseOK ? "noise ✓" : "noise ✗")")
                 MetricCell(label: "Power", value: String(format: "%.1f", d.powerW), unit: "W",
-                           sub: "\(String(format: "%.1f", d.energyWhSinceBoot)) Wh since boot")
+                           sub: energyLine)
             }
         }
         .background(Color.white.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
+
+    /// The energy total, said only as strongly as the samples allow.
+    ///
+    /// Three cases, matching `renderEnergy` in dash.go so the CLI and the app
+    /// cannot describe one accumulator differently. This used to be the single
+    /// string `"%.1f Wh since boot"`, which is the strongest of the three and
+    /// true only in the first: the accumulator integrates samples it actually
+    /// retrieved, so after any gap it holds an under-count. Measured here, a
+    /// dish that had drawn roughly 900 Wh displayed `90.3 Wh since boot`.
+    private var energyLine: String {
+        let wh = String(format: "%.1f", d.energyWhSinceBoot)
+        if d.energyCoversBoot {
+            return "\(wh) Wh since boot"
+        }
+        if d.energyAvgW > 0, d.energySeconds > 0 {
+            // Name the window the figure covers instead of the boot it doesn't.
+            return "\(wh) Wh over \(Self.span(Int(d.energySeconds))) · \(String(format: "%.1f", d.energyAvgW)) W"
+        }
+        // No honest denominator: quote the total and claim nothing about it.
+        return "\(wh) Wh measured"
+    }
+
+    /// Test seam for `energyLine`, which is private and not a `View`.
+    var energyLineForTesting: String { energyLine }
 
     private var sparklines: some View {
         VStack(alignment: .leading, spacing: 11) {

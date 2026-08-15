@@ -175,3 +175,39 @@ func TestLoadStatsRejectsForeignVersion(t *testing.T) {
 		t.Errorf("LoadStats() = %+v, want nil for a stale version", got)
 	}
 }
+
+// EnergyWh and ObsSeconds are supposed to advance together — every branch of
+// integrateEnergy that adds joules also adds seconds. They are still checked
+// against each other here because this file has more than one writer: the bash
+// `sl` shares the schema, and a stale build earlier on $PATH can write it too.
+//
+// Observed on a real machine: 251.95 Wh against 192 s, which the CLI published
+// as `avg 4724.1 W` and `est 140735.3 Wh over 1d 5h` — two fabricated figures
+// stated with complete confidence, from two numbers that were each individually
+// well-formed.
+func TestObservedAvgWRefusesAnImpossiblePair(t *testing.T) {
+	bad := &Snapshot{EnergyWh: 251.95, ObsSeconds: 192, UptimeS: 107247}
+	if avg, ok := bad.ObservedAvgW(); ok {
+		t.Fatalf("ObservedAvgW = %.1f W, want refusal — no dish draws that", avg)
+	}
+	// And it must not be able to claim the total covers the boot either, since
+	// that is the same ObsSeconds being trusted by a different predicate.
+	if bad.ObservedCoversBoot() {
+		t.Fatal("ObservedCoversBoot = true on a pair we just refused to average")
+	}
+
+	// The ordinary case still works, including right at the ceiling.
+	good := &Snapshot{EnergyWh: 30, ObsSeconds: 3600, UptimeS: 3600}
+	avg, ok := good.ObservedAvgW()
+	if !ok || avg < 29.9 || avg > 30.1 {
+		t.Fatalf("ObservedAvgW = %.2f, %v; want ~30 W, true", avg, ok)
+	}
+	if !good.ObservedCoversBoot() {
+		t.Fatal("ObservedCoversBoot = false for a boot fully covered by samples")
+	}
+
+	atCeiling := &Snapshot{EnergyWh: MaxPlausibleW, ObsSeconds: 3600, UptimeS: 3600}
+	if _, ok := atCeiling.ObservedAvgW(); !ok {
+		t.Fatalf("a mean of exactly %.0f W must be allowed; the bound is a ceiling, not a limit", MaxPlausibleW)
+	}
+}

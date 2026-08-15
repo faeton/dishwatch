@@ -34,6 +34,25 @@ const (
 	// ObsSecondsUnknown marks an epoch whose energy total predates the sample
 	// counter, so no honest average can be derived from it. See Snapshot.
 	ObsSecondsUnknown int64 = -1
+
+	// MaxPlausibleW bounds the mean draw we are willing to state for a dish.
+	// A Standard peaks near 150 W with the snow melter on and a Mini far below
+	// that, so anything past this is not a dish reading — it is EnergyWh and
+	// ObsSeconds describing different spans.
+	//
+	// The invariant is supposed to make that impossible: every branch of
+	// integrateEnergy that adds joules also adds seconds. It is enforced anyway
+	// because this file is not written by one program. The bash `sl` shares the
+	// schema, and any older or stale build on $PATH can write it too — this
+	// machine has a `~/.local/bin/sl` ahead of Homebrew — so a pair that never
+	// agreed can arrive from outside every branch we control. Measured here:
+	// 251.95 Wh against 192 s, published as `avg 4724.1 W` and an extrapolated
+	// `est 140735.3 Wh`, with total confidence.
+	//
+	// Refusing beats repairing. We cannot know which of the two numbers is the
+	// wrong one, so there is nothing to recompute; the caller already has an
+	// honest fallback that quotes the total and no average.
+	MaxPlausibleW = 200.0
 )
 
 // Snapshot mirrors the bash state.json schema. Booleans are stored as strings
@@ -109,14 +128,27 @@ func (s *Snapshot) ObservedAvgW() (float64, bool) {
 	if s == nil || s.ObsSeconds < 1 || s.EnergyWh <= 0 {
 		return 0, false // includes ObsSecondsUnknown
 	}
-	return s.EnergyWh * 3600 / float64(s.ObsSeconds), true
+	avg := s.EnergyWh * 3600 / float64(s.ObsSeconds)
+	// A count and a total that cannot both be true. See MaxPlausibleW: the
+	// pair can arrive from a writer outside this program, and every consumer
+	// of this average — the CLI's Energy line, its `est … over uptime`
+	// extrapolation, and the app's power readout — states it as fact.
+	if avg > MaxPlausibleW {
+		return 0, false
+	}
+	return avg, true
 }
 
 // ObservedCoversBoot reports whether the samples we hold account for
 // essentially the whole uptime, which is what lets the CLI say "since boot"
 // instead of quoting an observation window and an extrapolation.
 func (s *Snapshot) ObservedCoversBoot() bool {
-	return s != nil && s.ObsSeconds > 0 && s.ObsSeconds*100 >= s.UptimeS*95
+	if _, ok := s.ObservedAvgW(); !ok {
+		// An inconsistent pair must not be allowed to claim full coverage
+		// either — `ObsSeconds` is the same number both predicates trust.
+		return false
+	}
+	return s.ObsSeconds > 0 && s.ObsSeconds*100 >= s.UptimeS*95
 }
 
 // dirOverride, when non-empty, replaces the default cache location. It exists

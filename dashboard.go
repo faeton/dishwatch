@@ -54,6 +54,18 @@ type Dashboard struct {
 	EthMbps           int       `json:"ethMbps"`
 	PowerW            float64   `json:"powerW"`
 	EnergyWhSinceBoot float64   `json:"energyWhSinceBoot"`
+	// What the energy total may honestly be *called*, mirroring the three cases
+	// `renderEnergy` picks between. The app used to label it "Wh since boot"
+	// unconditionally, which is only true when the samples we hold cover the
+	// boot: the accumulator integrates retrieved samples, so after any gap the
+	// figure is an under-count presented as a total. On this machine that was
+	// 90 Wh shown as the since-boot draw of a dish that had actually used ~900.
+	//
+	// EnergyAvgW is 0 when no honest average exists — either nothing is counted
+	// yet, or the count and the total are inconsistent (see MaxPlausibleW).
+	EnergyCoversBoot bool    `json:"energyCoversBoot"`
+	EnergySeconds    int64   `json:"energySeconds"`
+	EnergyAvgW       float64 `json:"energyAvgW"`
 	PingSeries        []float64 `json:"pingSeries"`
 	PingAvg           float64   `json:"pingAvg"`
 	DownSeries        []float64 `json:"downSeries"`
@@ -295,6 +307,15 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 	// disabled there is no anchor → onBattery=false, bankAnchored=false.
 	if snap, _ := state.Load(); snap != nil {
 		d.EnergyWhSinceBoot = round1(snap.EnergyWh)
+		// Same predicates the CLI's Energy line uses, so the two surfaces
+		// cannot describe the same accumulator differently.
+		d.EnergyCoversBoot = snap.ObservedCoversBoot()
+		if snap.ObsSeconds > 0 {
+			d.EnergySeconds = snap.ObsSeconds
+		}
+		if avgW, ok := snap.ObservedAvgW(); ok {
+			d.EnergyAvgW = round1(avgW)
+		}
 		fillBank(&d, snap)
 	}
 	return d

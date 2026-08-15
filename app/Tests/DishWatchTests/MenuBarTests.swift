@@ -373,3 +373,81 @@ final class MenuBarTests: XCTestCase {
                        "changing the window must poll for it, not wait for the next tick")
     }
 }
+
+/// The energy readout says only as much as the samples support.
+///
+/// It was one unconditional string, `"%.1f Wh since boot"`, and the accumulator
+/// behind it integrates only samples actually retrieved — so after any gap it
+/// holds an under-count wearing the label of a total. Measured on a real dish:
+/// `90.3 Wh since boot` for a boot that had drawn roughly 900.
+@MainActor
+final class EnergyLineTests: XCTestCase {
+
+    private func line(_ d: DishData) -> String {
+        // Rendered through the view's own logic, via the same mirror the popover
+        // uses, so the test cannot drift from what is drawn.
+        ConnectedPopover(d: d, showSettings: .constant(false)).energyLineForTesting
+    }
+
+    func testCoveredBootMayClaimTheBoot() {
+        var d = DishData.sample
+        d.energyWhSinceBoot = 894.2
+        d.energyCoversBoot = true
+        XCTAssertEqual(line(d), "894.2 Wh since boot")
+    }
+
+    /// The common case, and the one that used to lie.
+    func testPartialCoverageNamesItsOwnWindowInstead() {
+        var d = DishData.sample
+        d.energyWhSinceBoot = 90.3
+        d.energyCoversBoot = false
+        d.energySeconds = 10_800
+        d.energyAvgW = 30.1
+
+        let s = line(d)
+        XCTAssertFalse(s.contains("since boot"), "it does not cover the boot: \(s)")
+        XCTAssertTrue(s.contains("90.3 Wh"))
+        XCTAssertTrue(s.contains("3h"), "names the window it does cover: \(s)")
+        XCTAssertTrue(s.contains("30.1 W"))
+    }
+
+    /// A total with no usable denominator — nothing counted yet, or a count and
+    /// a total that cannot both be true (`state.MaxPlausibleW`). Quote the
+    /// total, claim nothing else, and above all do not divide.
+    func testNoHonestDenominatorClaimsNothing() {
+        var d = DishData.sample
+        d.energyWhSinceBoot = 251.9
+        d.energyCoversBoot = false
+        d.energySeconds = 192
+        d.energyAvgW = 0        // the Go side refused to compute one
+
+        let s = line(d)
+        XCTAssertEqual(s, "251.9 Wh measured")
+        XCTAssertFalse(s.contains("since boot"))
+        // No wattage. Checked as "no separator plus trailing W" rather than
+        // "no letter W", which `Wh` satisfies trivially.
+        XCTAssertFalse(s.contains("·"), "no average may appear: \(s)")
+        XCTAssertFalse(s.hasSuffix(" W"), "no average may appear: \(s)")
+    }
+}
+
+extension MenuBarTests {
+    /// The energy total was in the app all along, as the smallest grey text on
+    /// the panel under Power — reported as "I don't see it at all". It is a
+    /// menu-bar field now, opt-in, so it can be put where it is actually read.
+    func testEnergyFieldRendersWholeWattHours() {
+        var d = DishData.sample
+        d.energyWhSinceBoot = 256.4
+        XCTAssertEqual(MenuBarField.energy.text(d), "256Wh")
+
+        // Nothing measured yet is not "0Wh"; it is nothing to say.
+        d.energyWhSinceBoot = 0
+        XCTAssertNil(MenuBarField.energy.text(d))
+    }
+
+    /// Off by default: adding a case to the enum must not silently widen the
+    /// menu bar of everyone who already had one configured.
+    func testEnergyIsNotOnByDefault() {
+        XCTAssertFalse(AppState.defaultFields.contains(.energy))
+    }
+}
