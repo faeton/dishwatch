@@ -207,6 +207,18 @@ Everything else the submission needs is in roadmap.md: the scaffolding to cut,
 the Guideline 5.2 trademark exposure, the `PrivacyInfo.xcprivacy` reasons, and
 the non-code work (screenshots, privacy policy URL, export compliance).
 
+## Shipped: v0.2.1, 2026-08-15
+
+`DishWatch-0.2.1.dmg` — a patch for the energy figure; notes in
+[release-notes-v0.2.1.md](release-notes-v0.2.1.md). Both notary submissions
+Accepted, DMG sha256 verified against the download rather than only against
+`checksums.txt`, formula and cask both at 0.2.1, and both upgraded and run here.
+
+Found by looking at the app rather than at a test: the Power cell read
+`90.3 Wh since boot` for a dish that had drawn roughly 900, and the CLI's Energy
+line published `avg 4724.1 W`. Neither is reachable from a fixture — both needed
+a real `state.json` whose two counters had drifted apart on a real machine.
+
 ## Shipped: v0.2.0, 2026-08-15
 
 `DishWatch-0.2.0.dmg` — universal, notarized and stapled, published at
