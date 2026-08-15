@@ -33,27 +33,27 @@ type Dashboard struct {
 	// has no envelope at all, which is the other reason this belongs here.
 	SchemaVersion int `json:"schemaVersion"`
 
-	State             string    `json:"state"`
-	SignalScore       int       `json:"signalScore"`
-	UptimeHours       float64   `json:"uptimeHours"`
-	Boots             int       `json:"boots"`
-	HardwareShort     string    `json:"hardwareShort"`
-	DeviceID          string    `json:"deviceId"`
-	Firmware          string    `json:"firmware"`
-	DownMbps          float64   `json:"downMbps"`
-	UpMbps            float64   `json:"upMbps"`
-	PingMs            float64   `json:"pingMs"`
-	DropPct           float64   `json:"dropPct"`
-	NoiseOK           bool      `json:"noiseOK"`
-	DownBarFrac       float64   `json:"downBarFrac"`
-	UpBarFrac         float64   `json:"upBarFrac"`
-	AzimuthDeg        float64   `json:"azimuthDeg"`
-	ElevationDeg      float64   `json:"elevationDeg"`
-	GpsValid          bool      `json:"gpsValid"`
-	GpsSats           int       `json:"gpsSats"`
-	EthMbps           int       `json:"ethMbps"`
-	PowerW            float64   `json:"powerW"`
-	EnergyWhSinceBoot float64   `json:"energyWhSinceBoot"`
+	State             string  `json:"state"`
+	SignalScore       int     `json:"signalScore"`
+	UptimeHours       float64 `json:"uptimeHours"`
+	Boots             int     `json:"boots"`
+	HardwareShort     string  `json:"hardwareShort"`
+	DeviceID          string  `json:"deviceId"`
+	Firmware          string  `json:"firmware"`
+	DownMbps          float64 `json:"downMbps"`
+	UpMbps            float64 `json:"upMbps"`
+	PingMs            float64 `json:"pingMs"`
+	DropPct           float64 `json:"dropPct"`
+	NoiseOK           bool    `json:"noiseOK"`
+	DownBarFrac       float64 `json:"downBarFrac"`
+	UpBarFrac         float64 `json:"upBarFrac"`
+	AzimuthDeg        float64 `json:"azimuthDeg"`
+	ElevationDeg      float64 `json:"elevationDeg"`
+	GpsValid          bool    `json:"gpsValid"`
+	GpsSats           int     `json:"gpsSats"`
+	EthMbps           int     `json:"ethMbps"`
+	PowerW            float64 `json:"powerW"`
+	EnergyWhSinceBoot float64 `json:"energyWhSinceBoot"`
 	// What the energy total may honestly be *called*, mirroring the three cases
 	// `renderEnergy` picks between. The app used to label it "Wh since boot"
 	// unconditionally, which is only true when the samples we hold cover the
@@ -63,18 +63,18 @@ type Dashboard struct {
 	//
 	// EnergyAvgW is 0 when no honest average exists — either nothing is counted
 	// yet, or the count and the total are inconsistent (see MaxPlausibleW).
-	EnergyCoversBoot bool    `json:"energyCoversBoot"`
-	EnergySeconds    int64   `json:"energySeconds"`
-	EnergyAvgW       float64 `json:"energyAvgW"`
-	PingSeries        []float64 `json:"pingSeries"`
-	PingAvg           float64   `json:"pingAvg"`
-	DownSeries        []float64 `json:"downSeries"`
-	DownMax           float64   `json:"downMax"`
-	DownAvg           float64   `json:"downAvg"`
-	UpSeries          []float64 `json:"upSeries"`
-	UpAvg             float64   `json:"upAvg"`
-	PowerSeries       []float64 `json:"powerSeries"`
-	PowerAvg          float64   `json:"powerAvg"`
+	EnergyCoversBoot bool      `json:"energyCoversBoot"`
+	EnergySeconds    int64     `json:"energySeconds"`
+	EnergyAvgW       float64   `json:"energyAvgW"`
+	PingSeries       []float64 `json:"pingSeries"`
+	PingAvg          float64   `json:"pingAvg"`
+	DownSeries       []float64 `json:"downSeries"`
+	DownMax          float64   `json:"downMax"`
+	DownAvg          float64   `json:"downAvg"`
+	UpSeries         []float64 `json:"upSeries"`
+	UpAvg            float64   `json:"upAvg"`
+	PowerSeries      []float64 `json:"powerSeries"`
+	PowerAvg         float64   `json:"powerAvg"`
 	// SeriesSeconds is how many samples the series above actually carry — which
 	// is not always the window that was asked for. The dish's ring is one sample
 	// per second but only as deep as the dish has been up, so a request for 15
