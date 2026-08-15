@@ -127,7 +127,7 @@ struct ConnectedPopover: View {
                 MetricCell(label: "Ping", value: "\(Int(d.pingMs))", unit: "ms",
                            sub: "drop \(String(format: "%.1f", d.dropPct))% · \(d.noiseOK ? "noise ✓" : "noise ✗")")
                 MetricCell(label: "Power", value: String(format: "%.1f", d.powerW), unit: "W",
-                           sub: energyLine)
+                           sub: energyLine, subHelp: energyCellHelp)
             }
         }
         .background(Color.white.opacity(0.06))
@@ -155,8 +155,31 @@ struct ConnectedPopover: View {
         return "\(wh) Wh measured"
     }
 
+    /// Spells out the window under the Power cell's total, which the cell has
+    /// no room to state and which differs from the Observed block's.
+    private var energyCellHelp: String {
+        let wh = String(format: "%.1f", d.energyWhSinceBoot)
+        if d.energyCoversBoot {
+            return "\(wh) Wh drawn since the dish last booted, from samples covering essentially the whole of it."
+        }
+        if d.energyAvgW > 0, d.energySeconds > 0 {
+            return """
+            \(wh) Wh measured across \(Self.span(Int(d.energySeconds))) of samples — \
+            not the whole boot, because energy only accumulates while DishWatch is \
+            retrieving readings. The true since-boot figure is higher.
+            """
+        }
+        return """
+        \(wh) Wh measured. How long that covers is not known for this boot, so no \
+        average is offered — the sample count and the total disagree, and the next \
+        reboot resets both.
+        """
+    }
+
     /// Test seam for `energyLine`, which is private and not a `View`.
     var energyLineForTesting: String { energyLine }
+    var energyCellHelpForTesting: String { energyCellHelp }
+    func energyHelpForTesting(_ o: ObservedStats) -> String { energyHelp(o) }
 
     private var sparklines: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -252,18 +275,28 @@ struct ConnectedPopover: View {
                         .font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(DW.amber.opacity(0.85))
                 }
+                // Split into two views so the energy figure can carry its own
+                // tooltip. A `Text` concatenation takes one `.help` for the
+                // whole run, and the question people actually ask here is about
+                // this number specifically: *used over how long?*
+                //
                 // Energy sits with the other session totals, not with the live
                 // Power cell: it is a total for this block's window, computed
                 // from this block's own samples.
-                // The bolt is an SF Symbol rather than the ⚡ emoji, which
-                // renders in full colour and breaks a line that is otherwise
-                // uniformly dimmed. As a symbol it inherits the foreground
-                // style, like the arrows beside it.
-                (Text("\(Self.bytes(o.downBytes)) ↓ · \(Self.bytes(o.upBytes)) ↑ · ")
-                 + Text(Image(systemName: "bolt.fill"))
-                 + Text(" \(Self.wh(o.energyWh))"))
-                    .font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(DW.textA(0.45))
+                HStack(spacing: 0) {
+                    Text("\(Self.bytes(o.downBytes)) ↓ · \(Self.bytes(o.upBytes)) ↑")
+                        .help("Transferred during the \(Self.dur(o.seconds)) this block covers.")
+                    Text(" · ")
+                    // The bolt is an SF Symbol rather than the ⚡ emoji, which
+                    // renders in full colour and breaks a line that is
+                    // otherwise uniformly dimmed. As a symbol it inherits the
+                    // foreground style, like the arrows beside it.
+                    (Text(Image(systemName: "bolt.fill")) + Text(" \(Self.wh(o.energyWh))"))
+                        .help(energyHelp(o))
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 11)).monospacedDigit()
+                .foregroundStyle(DW.textA(0.45))
             }
             .padding(.horizontal, 16).padding(.top, 12)
             // Load-bearing, per docs/macos-ui.md: "Observed" is a claim about
@@ -272,6 +305,23 @@ struct ConnectedPopover: View {
             // minutes and comes back to "Observed 2h 14m" needs this reachable.
             .help("Covers seconds the dish recorded and DishWatch retrieved, including up to 15 min of catch-up after a gap. Longer gaps are excluded entirely.")
         }
+    }
+
+    /// Says the window out loud, and says which of the screen's two Wh figures
+    /// this one is.
+    ///
+    /// There are two, deliberately, and they cover different spans: this total
+    /// belongs to the Observed window, while the Power cell's belongs to a
+    /// separate since-boot accumulator. Two watt-hour numbers a few points apart
+    /// with no explanation is a worse problem than the one missing number this
+    /// replaced, so each says what it measures and over how long.
+    private func energyHelp(_ o: ObservedStats) -> String {
+        let mean = o.seconds > 0 ? o.energyWh * 3600 / Double(o.seconds) : 0
+        return """
+        \(Self.wh(o.energyWh)) drawn over the \(Self.dur(o.seconds)) this block covers \
+        — about \(String(format: "%.1f", mean)) W on average.
+        The figure under Power is the separate since-boot total.
+        """
     }
 
     private func observedLine(_ o: ObservedStats) -> String {
@@ -421,6 +471,10 @@ struct MetricCell: View {
     var value: String
     var unit: String
     var sub: String? = nil
+    /// Tooltip for the sub-label. Optional because most sub-labels restate
+    /// something already on screen; the energy one names a window that is not
+    /// written anywhere in the cell.
+    var subHelp: String? = nil
     var barFrac: Double? = nil
     var barColor: Color = DW.down
 
@@ -440,6 +494,7 @@ struct MetricCell: View {
                 .frame(height: 3).padding(.top, 7)
             } else if let sub {
                 Text(sub).font(.system(size: 11)).foregroundStyle(DW.textA(0.45)).padding(.top, 6)
+                    .help(subHelp ?? "")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
