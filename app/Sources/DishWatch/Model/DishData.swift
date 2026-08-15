@@ -10,6 +10,42 @@ enum LinkState: String, Decodable, Sendable {
     var isOnline: Bool { self == .connected || self == .weak }
 }
 
+/// How the dish gets pointed at the sky — see `hardwareAim` in dashboard.go,
+/// which derives it from the model because the dish itself will not say.
+///
+/// `.unknown` is a real case and the default, not a bug state: an unrecognised
+/// model, an older helper that does not emit the field, and an offline snapshot
+/// all land here, and all three render as *nothing*. The alternative is telling
+/// someone their motorized dish needs turning by hand, which is a wrong answer
+/// to the one question this exists to answer.
+enum DishAim: String, Decodable, Sendable {
+    case motorized
+    case manual
+    case unknown = ""
+
+    /// Said as what the owner does, not as what the hardware contains:
+    /// "actuators" is the vendor's word for it and answers a question nobody
+    /// asked.
+    var label: String {
+        switch self {
+        case .motorized: return "Self-aiming"
+        case .manual:    return "Aim by hand"
+        case .unknown:   return ""
+        }
+    }
+
+    /// A symbol, never the sole carrier of the meaning — the label rides beside
+    /// it. Both are SF Symbols available since macOS 11, which the drawn dish
+    /// glyph beside them is not required to be.
+    var symbol: String {
+        switch self {
+        case .motorized: return "gearshape.fill"
+        case .manual:    return "hand.point.up.left.fill"
+        case .unknown:   return "questionmark"
+        }
+    }
+}
+
 /// One snapshot of dish + power state. Mirrors the Go `Dashboard` DTO emitted by
 /// `dishwatch json` — see dashboard.go.
 ///
@@ -31,6 +67,7 @@ struct DishData: Decodable, Sendable, Equatable {
     var uptimeHours: Double = 0
     var boots: Int = 0
     var hardwareShort: String = "?"
+    var hardwareAim: DishAim = .unknown
     var deviceId: String = ""
     var firmware: String = ""
 
@@ -229,6 +266,7 @@ extension DishData {
         d.uptimeHours = 7.3
         d.boots = 4
         d.hardwareShort = "Mini"
+        d.hardwareAim = .manual
         d.deviceId = "mini1_panda"
         d.firmware = "2026.04.07"
         d.downMbps = 142.5
@@ -288,7 +326,7 @@ extension DishData {
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
-        case state, signalScore, uptimeHours, boots, hardwareShort, deviceId, firmware
+        case state, signalScore, uptimeHours, boots, hardwareShort, hardwareAim, deviceId, firmware
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
         case energyCoversBoot, energySeconds, energyAvgW
@@ -329,6 +367,10 @@ extension DishData {
         d.uptimeHours = s(.uptimeHours, d.uptimeHours)
         d.boots = s(.boots, d.boots)
         d.hardwareShort = s(.hardwareShort, d.hardwareShort)
+        // Lenient like the rest: an aim value this build has never heard of
+        // fails its `RawRepresentable` init, and falls back to `.unknown`
+        // rather than failing the whole snapshot.
+        d.hardwareAim = s(.hardwareAim, d.hardwareAim)
         d.deviceId = s(.deviceId, d.deviceId)
         d.firmware = s(.firmware, d.firmware)
         d.downMbps = s(.downMbps, d.downMbps)
@@ -446,14 +488,61 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
     ///
     /// Rounds *before* choosing the format, so 9.96 renders `10` rather than the
     /// wider and self-contradicting `10.0`.
+    ///
+    /// `%.0f` of an already-rounded value rather than `Int(_:)`, which traps on
+    /// anything too large to represent. That was unreachable while this only
+    /// ever formatted `downMbps`; the sparkline scrub now feeds it individual
+    /// ring samples.
     static func compactMbps(_ v: Double) -> String {
+        guard v.isFinite else { return "—" }
         let r = (v * 10).rounded() / 10
-        return r >= 10 ? "\(Int(r.rounded()))" : String(format: "%.1f", r)
+        // `.rounded()` inside the format, not `%.0f` alone: printf rounds .5 to
+        // even, so 142.5 would print as `142`.
+        return r >= 10 ? String(format: "%.0f", r.rounded()) : String(format: "%.1f", r)
+    }
+
+    /// Whether this field is a reading of the link *right now*.
+    ///
+    /// The two that aren't are running totals, and a running total does not
+    /// become false when the dish stops answering — it just stops growing.
+    /// Energy is watt-hours already measured; the bank percentage comes from the
+    /// CLI's own anchor rather than from anything the dish just said.
+    var isLiveReading: Bool {
+        switch self {
+        case .energy, .battery: return false
+        default:                return true
+        }
+    }
+
+    /// What a live field shows when there is no current reading behind it.
+    ///
+    /// A dash, not a blank and not the last known number. Dropping the field
+    /// would reflow the bar and could empty it entirely; keeping the number is
+    /// the bug this exists for — an unreachable dish reports as a *successful*
+    /// poll carrying `offlineDashboard`, which restores the last snapshot's ping
+    /// and leaves throughput at zero, so the bar read `31ms ↓0.0 ↑0.0` while the
+    /// popover beside it said Offline. Both halves of that were false in
+    /// different directions: a stale ping presented as current, and a zero
+    /// presented as a measurement of an idle link.
+    ///
+    /// The arrows stay so the bar keeps its shape and the dashes keep their
+    /// identity: `↓— ↑—` is unmistakably *these two numbers are unavailable*.
+    var placeholder: String? {
+        switch self {
+        case .pingSpark:          return nil
+        case .down:               return "↓—"
+        case .up:                 return "↑—"
+        case .ping, .signal, .power, .energy, .battery: return "—"
+        }
     }
 
     /// What this field renders as, or nil when it has nothing to say right now
     /// (battery off a bank) or is not text at all (the sparkline).
-    func text(_ d: DishData) -> String? {
+    ///
+    /// `live` is the caller's answer to "may these numbers be quoted as
+    /// current?" — see `AppState.Quality.showsLiveReadings`.
+    func text(_ d: DishData, live: Bool = true) -> String? {
+        guard live || !isLiveReading else { return placeholder }
         switch self {
         case .pingSpark: return nil
         case .ping:      return "\(Int(d.pingMs))ms"

@@ -17,7 +17,12 @@ enum DW {
     // Accents
     static let cyan  = Color(hex: 0x37D7FF) // signal / brand
     static let down  = Color(hex: 0x4B8DF8) // download
-    static let up    = Color(hex: 0x6FA8FF) // upload
+    /// Upload. Violet, not the near-identical blue (`0x6FA8FF`) it used to be.
+    /// The two were four points of hue apart, which was survivable while they
+    /// only ever appeared in separate cells — and stopped being survivable the
+    /// moment both series went onto one axis, where the colour is the *only*
+    /// thing saying which trace is which.
+    static let up    = Color(hex: 0xA78BFA)
     static let amber = Color(hex: 0xFFB340) // power / battery
     static let amberA = Color(hex: 0xFF9F0A)
     static let amberB = Color(hex: 0xFFC44D)

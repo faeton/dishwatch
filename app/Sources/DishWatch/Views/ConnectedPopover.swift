@@ -7,6 +7,8 @@ struct ConnectedPopover: View {
     @EnvironmentObject var store: AppState
     @State private var detailExpanded = false
     @State private var confirmReboot = false
+    /// Non-nil only while a drag is on one of the sparklines.
+    @State private var scrub: Scrub?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,13 +81,22 @@ struct ConnectedPopover: View {
         }
     }
 
+    /// Title row, and the width beside it spent on *which dish this is*.
+    ///
+    /// The chip sits here rather than in the hero because the hero's lines are
+    /// about this session — uptime, boots, firmware — and the hardware is not.
+    /// It is the one fact on screen that never changes between polls, and the
+    /// empty run between the app name and the clock was the only place with
+    /// room for a picture of it.
     private var header: some View {
         HStack {
             HStack(spacing: 8) {
                 SignalBars(color: DW.cyan, height: 13, barWidth: 3, fraction: Double(d.signalScore) / 100)
                 Text("DishWatch").font(.system(size: 14, weight: .bold))
             }
-            Spacer()
+            Spacer(minLength: 8)
+            HardwareChip(model: d.hardwareShort, aim: d.hardwareAim)
+            Spacer(minLength: 8)
             HStack(spacing: 10) {
                 Text(Date.now, format: .dateTime.hour().minute().second())
                     .font(.system(size: 12)).monospacedDigit().foregroundStyle(DW.textA(0.5))
@@ -102,7 +113,12 @@ struct ConnectedPopover: View {
                     StatusDot(color: dotColor, pulse: store.hasLoaded && d.state == .connected)
                     Text(heroLabel).font(.system(size: 22, weight: .bold))
                 }
-                Text("up \(d.uptimeHours, specifier: "%.1f") h · boots \(d.boots) · \(d.hardwareShort)")
+                // The model used to trail this line. It moved to the header
+                // chip, which says the same word beside a picture of the thing
+                // and has room for the half that was missing — whether the
+                // panel aims itself. Repeating it here would be the only
+                // duplicated fact in the panel.
+                Text("up \(d.uptimeHours, specifier: "%.1f") h · boots \(d.boots)")
                     .font(.system(size: 12.5)).monospacedDigit().foregroundStyle(DW.textA(0.55))
                     .padding(.top, 7)
                 Text("\(d.deviceId) · fw \(d.firmware)")
@@ -120,8 +136,13 @@ struct ConnectedPopover: View {
             GridRow {
                 MetricCell(label: "Download", value: String(format: "%.1f", d.downMbps), unit: "Mbps",
                            barFrac: d.downBarFrac, barColor: DW.down)
+                // Violet, matching the ↑ trace and legend below. The cell drew
+                // its bar in the *download* blue, which was invisible while the
+                // two colours only ever appeared in separate cells and is a
+                // miscue now that one chart distinguishes the directions by
+                // colour alone.
                 MetricCell(label: "Upload", value: String(format: "%.1f", d.upMbps), unit: "Mbps",
-                           barFrac: d.upBarFrac, barColor: DW.down)
+                           barFrac: d.upBarFrac, barColor: DW.up)
             }
             GridRow {
                 MetricCell(label: "Ping", value: "\(Int(d.pingMs))", unit: "ms",
@@ -192,31 +213,108 @@ struct ConnectedPopover: View {
                 // with two minutes of ring, and captioning that "15 m" would be
                 // the same class of lie as the `max` figure this block already
                 // lost once.
-                SectionLabel(text: coveredLabel).tracking(0.8)
+                SectionLabel(text: headingLabel).tracking(0.8)
                     .help("Covers the last \(Self.span(d.seriesSeconds)) the dish has in its own history ring — which is all of it after a reboot, however wide a window you pick.")
                 Spacer()
                 windowPicker
             }
-            // Row names are units, not words. "Ping"/"Down"/"Power" put a word
-            // with two meanings in a column about link health: beside "Ping",
-            // "Down" reads as *outage*, and it is download throughput — the same
-            // number as the Download cell above.
-            sparkRow("Ping ms", d.pingSeries, DW.cyan, "avg \(Int(d.pingAvg)) ms")
-            // No trailing figure on ↓. It used to read `max <n>`, a
-            // 60-second maximum presented as a peak — the defect docs/macos-ui.md
-            // opens with. The sparkline already shows the shape, and the
-            // Observed footer below carries a peak that means something.
-            sparkRow("↓ Mbps", d.downSeries, DW.down, nil)
-            sparkRow("Power W", d.powerSeries, DW.amber, "avg \(String(format: "%.1f", d.powerAvg)) W")
-            // Rows for series the dish did not send are omitted, not drawn
-            // blank. This is the other half of `shortestSeries` in dashboard.go,
-            // which excludes an empty ring from the covered-window figure so one
-            // missing ring cannot hide two good traces. That exclusion is only
-            // honest if the absent row is *also* gone — otherwise firmware with
-            // no `powerIn` gets a blank power row under a heading claiming to
-            // cover it.
+            ForEach(SparkRow.allCases) { row in
+                sparkRow(row)
+            }
         }
         .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 6)
+        // A gesture that never ends leaves a marker behind: `onEnded` does not
+        // fire when the panel is dismissed mid-drag, and this block outlives a
+        // dismissal.
+        .onDisappear { scrub = nil }
+    }
+
+    /// The sparkline rows.
+    ///
+    /// Download and upload are **one row with two traces**, not two rows. They
+    /// share a unit and a window, so one shared axis is both drawable and
+    /// honest, and it makes the thing people actually read a chart of
+    /// throughput for — the gap between the two directions — a distance on
+    /// screen rather than a comparison between two independently auto-ranged
+    /// pictures.
+    ///
+    /// An enum rather than three calls to a generic row helper: the scrub state
+    /// has to name a row, and a label string is a poor key for one.
+    private enum SparkRow: String, CaseIterable, Identifiable {
+        case ping, throughput, power
+        var id: String { rawValue }
+    }
+
+    /// Where a drag currently is, for the one row being scrubbed.
+    ///
+    /// One piece of state for all three rows rather than one each: only one
+    /// pointer is ever down, and per-row state lets a released marker linger.
+    private struct Scrub: Equatable {
+        var row: SparkRow
+        /// Column under the pointer — see `Spark.span`.
+        var column: Int
+    }
+
+    /// Where each row's chart floor sits.
+    ///
+    /// Throughput is the one quantity here with a true zero, and the only row
+    /// where amplitude is meant to mean magnitude. Auto-ranging it draws a
+    /// rock-steady 140–143 Mbps link as a rollercoaster, and on a shared axis a
+    /// download and upload that happen to sit close together become two
+    /// full-height traces of noise — utilization drawn as amplitude, which is
+    /// the `avg 3` defect in picture form.
+    ///
+    /// Ping and power keep auto-ranging, because for them the variation *is*
+    /// the news: a 20–36 ms ping pinned to the bottom of a 0-based row says
+    /// nothing at all.
+    private func baseline(_ row: SparkRow) -> Spark.Baseline {
+        row == .throughput ? .zero : .auto
+    }
+
+    /// The traces a row actually draws. Series the dish did not send are
+    /// dropped here, so nothing downstream — the legend, the scrub readout, the
+    /// age in the heading — can describe a line that is not on screen.
+    private func drawn(_ row: SparkRow) -> [SparkTrace] {
+        traces(row).filter { $0.values.count > 1 }
+    }
+
+    private func traces(_ row: SparkRow) -> [SparkTrace] {
+        switch row {
+        case .ping:
+            return [SparkTrace(values: d.pingSeries, color: DW.cyan)]
+        case .throughput:
+            // Download keeps the gradient; upload is a line, a little thicker.
+            // A low trace *inside* another trace's fill dissolves into it, which
+            // is how a real 14 Mbps upload comes to read as no upload at all.
+            // …and a heavier fill than a lone trace carries, because the pair
+            // is only easy to read while one of them is an *area*. At the
+            // shared row's usual shape — download an order up from upload — the
+            // hues are enough. At the shape this dish actually spends its day
+            // in, both directions a few Mbps and crossing constantly, they are
+            // not, and the body under the download line is what tells them
+            // apart without a legend lookup.
+            return [SparkTrace(symbol: "↓", values: d.downSeries, color: DW.down,
+                               fillOpacity: 0.5),
+                    SparkTrace(symbol: "↑", values: d.upSeries, color: DW.up,
+                               filled: false, width: 1.7)]
+        case .power:
+            return [SparkTrace(values: d.powerSeries, color: DW.amber)]
+        }
+    }
+
+    /// The heading names the span the *data* covers — and, while a row is being
+    /// scrubbed, how far back the marked sample sits instead. The dish records
+    /// one sample per second, so a column distance is an age, and this is the
+    /// only place with room to say it.
+    /// Derived on every frame from the row's *current* span rather than stored
+    /// with the gesture. A poll landing mid-drag shifts the series left, and a
+    /// stored age would then caption the marked sample as younger than it now
+    /// is — the same class of stale caption `seriesSeconds` exists to prevent.
+    private var headingLabel: String {
+        guard let s = scrub else { return coveredLabel }
+        let span = Spark.span(drawn(s.row))
+        let ago = span - min(span, max(0, s.column))
+        return ago == 0 ? "now" : "\(Self.span(ago)) ago"
     }
 
     /// An unreachable dish returns no ring at all, and "Last 0 s" over three
@@ -373,22 +471,132 @@ struct ConnectedPopover: View {
     }
 
     @ViewBuilder
-    private func sparkRow(_ name: String, _ series: [Double], _ color: Color, _ trailing: String?) -> some View {
+    private func sparkRow(_ row: SparkRow) -> some View {
         // A single point cannot be a trace, and `Spark` draws nothing for one —
         // so anything under two samples is a row with a label and no content.
-        if series.count > 1 {
-            sparkRowBody(name, series, color, trailing)
+        //
+        // Traces for series the dish did not send are dropped, and a row left
+        // with none is omitted rather than drawn blank. This is the other half
+        // of `shortestSeries` in dashboard.go, which excludes an empty ring from
+        // the covered-window figure so one missing ring cannot hide two good
+        // traces. That exclusion is only honest if the absent row is *also*
+        // gone — otherwise firmware with no `powerIn` gets a blank power row
+        // under a heading claiming to cover it. Per trace, not per row, now that
+        // one row carries two: a dish sending downlink and no uplink ring draws
+        // the download line alone, with a legend that says so.
+        let traces = drawn(row)
+        if !traces.isEmpty {
+            sparkRowBody(row, traces)
         }
     }
 
-    private func sparkRowBody(_ name: String, _ series: [Double], _ color: Color, _ trailing: String?) -> some View {
-        HStack(spacing: 12) {
-            Text(name).font(.system(size: 11)).foregroundStyle(DW.textA(0.55)).frame(width: 52, alignment: .leading)
-            Spark(values: series, color: color).frame(height: 24)
+    private func sparkRowBody(_ row: SparkRow, _ drawn: [SparkTrace]) -> some View {
+        let span = Spark.span(drawn)
+        return HStack(spacing: 12) {
+            rowLabel(row, drawn)
+                .font(.system(size: 11)).foregroundStyle(DW.textA(0.55))
+                .frame(width: 52, alignment: .leading)
+            Spark(traces: drawn, baseline: baseline(row),
+                  marker: scrub?.row == row ? scrub?.column : nil)
+                .frame(height: 24)
+                .overlay(scrubTarget(row, span: span))
             // Keeps the fixed width even when there is no trailing figure, so
             // dropping one row's label does not shift the sparklines above it.
-            Text(trailing ?? "").font(.system(size: 11)).monospacedDigit()
-                .foregroundStyle(DW.textA(0.45)).frame(width: 60, alignment: .trailing)
+            trailing(row, drawn, span: span)
+                .font(.system(size: 11)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .foregroundStyle(DW.textA(0.45))
+                .frame(width: 60, alignment: .trailing)
+        }
+    }
+
+    /// Row names are units, not words. "Ping"/"Down"/"Power" put a word with two
+    /// meanings in a column about link health: beside "Ping", "Down" reads as
+    /// *outage*, and it is download throughput — the same number as the Download
+    /// cell above.
+    ///
+    /// The ↓↑ row's arrows are also the chart's legend: they carry the trace
+    /// colours, and nothing else on screen says which line is which. Built from
+    /// the *drawn* traces so a row that lost an absent series does not keep
+    /// advertising it.
+    private func rowLabel(_ row: SparkRow, _ drawn: [SparkTrace]) -> Text {
+        switch row {
+        case .ping:  return Text("Ping ms")
+        case .power: return Text("Power W")
+        case .throughput:
+            return drawn.reduce(Text("")) { $0 + Text($1.symbol).foregroundStyle($1.color) } + Text(" Mbps")
+        }
+    }
+
+    /// The figure to the right of a trace: its window statistic normally, and
+    /// the value under the pointer while that row is being scrubbed.
+    ///
+    /// A scrubbed figure is a *sample*, not a statistic, which is the only
+    /// reason the ↓↑ row may show one at all. Its idle trailing stays empty on
+    /// purpose — a mean throughput there reads as capability, the defect
+    /// docs/macos-ui.md opens with — and naming one second of the trace claims
+    /// nothing of the sort.
+    private func trailing(_ row: SparkRow, _ drawn: [SparkTrace], span: Int) -> Text {
+        if let s = scrub, s.row == row {
+            var out = Text("")
+            var first = true
+            for t in drawn {
+                guard let v = Spark.sample(t, at: s.column, span: span) else { continue }
+                if !first { out = out + Text(" ") }
+                first = false
+                let value = Text("\(t.symbol)\(Self.sampleText(row, v))")
+                // The colour is what ties the number to its line; a single-trace
+                // row has nothing to tie it to and stays in the dimmed default.
+                out = out + (t.symbol.isEmpty ? value : value.foregroundStyle(t.color))
+            }
+            return out
+        }
+        switch row {
+        case .ping:       return Text("avg \(Int(d.pingAvg)) ms")
+        case .throughput: return Text("")
+        case .power:      return Text("avg \(String(format: "%.1f", d.powerAvg)) W")
+        }
+    }
+
+    /// The value under the pointer, in the row's own unit.
+    ///
+    /// Formatted, never converted through `Int`: `Int(Double)` traps on a value
+    /// too large to represent, and this is the one number on screen that comes
+    /// straight from a sample rather than from a bounded statistic.
+    private static func sampleText(_ row: SparkRow, _ v: Double) -> String {
+        switch row {
+        case .ping:       return String(format: "%.0f ms", v.rounded())
+        // The menu bar's rule, for the menu bar's reason: a decimal only below
+        // 10 Mbps, where flat integers turn an idle-but-healthy link into ↓0.
+        case .throughput: return MenuBarField.compactMbps(v)
+        case .power:      return String(format: "%.1f W", v)
+        }
+    }
+
+    /// The drag target over one chart.
+    ///
+    /// `minimumDistance: 0`, so a press with no movement already reads a value.
+    /// It has to be a press: `.help` tooltips do not fire inside this panel and
+    /// neither does hover tracking — the `MenuBarExtra(.window)` panel is
+    /// non-activating, which is the finding docs/macos-ui.md records under
+    /// *Tooltips are not a place to put information*. A click is the one thing
+    /// the panel is known to receive, which is why its buttons work.
+    private func scrubTarget(_ row: SparkRow, span: Int) -> some View {
+        GeometryReader { g in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            scrub = Scrub(row: row,
+                                          column: Spark.column(atX: v.location.x, width: g.size.width, span: span))
+                        }
+                        // Cleared on release rather than left pinned. The series
+                        // shift left every poll, so a marker that outlived the
+                        // gesture would sit on a different second a second later
+                        // while still captioned with the old age.
+                        .onEnded { _ in scrub = nil }
+                )
         }
     }
 

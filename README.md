@@ -175,6 +175,39 @@ These are genuine dish/firmware limitations, not missing features:
 - **Stow / unstow** — the Mini has no actuators (`HAS_ACTUATORS_NO`), so there's
   nothing to stow.
 
+## Knowing which dish you have
+
+`sl status` and `sl dash` gloss the raw model string, and the macOS app puts the
+same thing in its header beside a drawn dish:
+
+```
+Hardware:     rev3_proto2  (Standard Gen2, self-aiming)   class=CONSUMER …
+```
+
+The gloss answers the question the raw string does not: **is this thing
+motorized, or do I aim it myself?** The dish will not say directly —
+`dish_get_context`, which carries the actuator flag, is `PermissionDenied` to an
+unauthenticated caller and `get_status` has no such field — so it is inferred
+from the model, which is sound because the motors are a property of the model
+and nothing else:
+
+| Model string | Dish | Aim |
+|---|---|---|
+| `rev1_*` | Round Gen1 | self-aiming |
+| `rev2_*`, `rev3_*` | Standard Gen2 (rectangular) | self-aiming |
+| `rev4_*` | Standard Gen3 | by hand |
+| `mini1_*` | Mini | by hand |
+| `hp*` | flat High Performance | by hand |
+
+Anything else keeps its raw string and gets no gloss at all — a guess here sends
+someone up a mast for nothing. The table is `classifyHardware` in `dashboard.go`.
+
+If you want to confirm it against the hardware rather than the table,
+`sl raw '{"dish_stow":{"unstow":true}}'` returns OK on a motorized dish (a
+no-op when it is already unstowed) and `HAS_ACTUATORS_NO` on one without motors.
+It does command the actuators, so don't run it on a dish that is stowed unless
+you mean to unfold it.
+
 ## Files
 
 - `~/.cache/sl/state.json` — last successful snapshot (includes the energy

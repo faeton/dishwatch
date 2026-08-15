@@ -55,6 +55,32 @@ enum Render {
                 .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "settings")
 
+        // The hardware chip has three states and the popover shots only ever
+        // show one of them — `DishData.sample` is a Mini, so nothing else here
+        // renders the motorized case, or the unrecognised model that must come
+        // out as a name with *no* aim clause after it.
+        snap(VStack(alignment: .leading, spacing: 8) {
+                HardwareChip(model: "Standard Gen2", aim: .motorized)
+                HardwareChip(model: "Mini", aim: .manual)
+                HardwareChip(model: "rev9_martian", aim: .unknown)
+                HardwareChip(model: "?", aim: .unknown) // draws nothing at all
+             }
+             .padding(12).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "hardware")
+
+        // The shared throughput row at its *hard* shape: both directions a few
+        // Mbps and crossing constantly. `DishData.sample` is the easy shape —
+        // download an order of magnitude up — where two hues are plenty, and it
+        // is not the shape a roaming dish spends its day in. The download fill
+        // weight exists for this picture; without a shot of it, a later change
+        // to that number looks free.
+        var tangled = DishData.sample
+        tangled.downSeries = [3, 12, 1, 9, 20, 4, 7, 15, 2, 11, 6, 18, 3, 8, 13, 5]
+        tangled.upSeries   = [5, 9, 4, 14, 7, 12, 3, 10, 16, 6, 9, 4, 11, 7, 2, 8]
+        snap(ConnectedPopover(d: tangled, showSettings: .constant(false)).environmentObject(store)
+                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "tangled")
+
         // Menu-bar glyphs: render each icon mode as the black-ink silhouette the
         // template image uses, on a light bar, to verify shapes aren't blobs.
         for mode in IconMode.allCases {

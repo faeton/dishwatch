@@ -97,7 +97,7 @@ that they didn't apply:
 - **Incomparable between glances.** Conceded, and answered by making the block
   self-describing: the heading states the span the *data* covers on every frame,
   so no glance and no screenshot is ambiguous about which window it is showing.
-- **Reintroducing mean throughput.** It does not. The `↓ Mbps` row still carries
+- **Reintroducing mean throughput.** It does not. The `↓↑ Mbps` row still carries
   no trailing figure at any window — widening the window changes the trace, not
   what is claimed about it. Only ping and power keep trailings, and both are
   legitimately means at any horizon.
@@ -149,9 +149,121 @@ been up a while, which is every dish anyone tests against.
 | Down / Up | **volume** | observed | footer | `4.2 GB ↓ · 0.6 GB ↑` |
 | Power | mean, zeros excluded | selected spark window | spark trailing | `avg 24.0 W` |
 | Power | mean, zeros excluded | observed | grid sub + footer | `23.8 W session` |
+| Down / Up | **the sample under the pointer** | one second | spark trailing, while scrubbing | `↓143 ↑14` |
 
 Deliberately absent: any session mean for down or up. The Go DTO does not even
 carry the field, so the view cannot accidentally render one.
+
+### Download and upload share one chart (2026-08-15)
+
+Upload had no trace at all — the block plotted ping, download and power, and the
+`↑` number appeared only in the grid cell and the Observed peaks. It is one row
+with two traces rather than a fourth row, and two rules make that honest:
+
+- **One vertical range across both, floored at zero.** Auto-ranging each trace
+  to itself would draw a 14 Mbps upload at the same height as a 143 Mbps
+  download: two correct lines composing a false picture, which is the defect at
+  the top of this document wearing a different hat. Sharing a `min..max` range
+  is not enough either — a download and upload that happen to sit close together
+  become two full-height traces of noise, which is utilization drawn as
+  amplitude. Throughput has a true zero, so this row alone uses `0..max`; ping
+  and power keep auto-ranging, because for them the variation *is* the news.
+- **Download keeps the gradient; upload is a line, slightly thicker.** A low
+  trace inside another trace's fill dissolves into it, which is how a real
+  14 Mbps upload comes to read as no upload at all.
+
+The cost is real and accepted: while download is an order of magnitude larger,
+upload sits near the floor and shows proportion rather than shape. **Scrubbing
+does not undo that** — it reads back a value at a second you already chose, not
+a wiggle the eye never saw. What the shared axis buys instead is the reading the
+row exists for: download collapsing toward upload is a distance on screen.
+Upload's own shape is a different question, and if it becomes a requirement it
+costs a second row, not a second scale the canvas cannot announce.
+- **Right-aligned, never stretched.** `LastN` clamps each ring independently, so
+  the two series can arrive with different lengths. Both end at *now* on the
+  right and a shorter one starts further in. Stretching it across the full width
+  would relabel every one of its samples as older than it is — `seriesSeconds`
+  already refuses to make that claim in the heading, and the drawing must not
+  make it either.
+
+A trace whose series is empty is dropped from the row and the legend drops its
+arrow with it; a row left with no traces is omitted entirely, as before.
+
+Colour is now load-bearing, so `DW.up` moved from `0x6FA8FF` to violet
+`0xA78BFA`. It was four points of hue from `DW.down`, which was survivable while
+the two only ever appeared in separate cells and is not survivable on one axis.
+The Upload grid cell's bar was drawing in the *download* blue; it now matches.
+
+**Colour alone was still not enough (2026-08-15).** Two hues separate the traces
+only while the row is at its easy shape — download an order of magnitude above
+upload. At the shape a roaming dish actually spends its day in, both directions
+a few Mbps and crossing a dozen times across 24 points of height, "the blue one"
+and "the violet one" become a colour-matching exercise, and that is before
+anyone who cannot separate the hues at all. So the pair differs in **kind**, not
+only in hue:
+
+- **Download is an area**, at a heavier fill than a lone trace carries
+  (`fillOpacity: 0.5` against the 0.33 default).
+- **Upload is a bare line**, unfilled and a little thicker (1.7) to pay for the
+  fill it does not have. A low trace *inside* another trace's fill dissolves
+  into it, which is how a real 14 Mbps upload comes to read as no upload.
+
+The harness renders both shapes — `connected.png` for the easy one, `tangled.png`
+for the crossing one — because a change to that fill weight looks free against
+the easy shot alone.
+
+### Which dish this is, and who aims it
+
+The header carries a drawn dish, the model, and whether the panel aims itself:
+`🛰 Standard Gen2 · ⚙︎ Self-aiming`.
+
+The aim half is the whole reason it exists. `hardwareShort` was the only thing
+the app ever said about the hardware and it said **"Standard"** for both a Gen2
+and a Gen3 — the two units that differ on precisely this question, one aiming
+itself and the other aimed by hand and never moved again. Nothing else on any
+screen answered it, and the CLI did not either.
+
+- **The generation is in the name** now (`Standard Gen2`, `Standard Gen3`,
+  `Round Gen1`, `Mini`, `High Performance`), because a label that cannot
+  distinguish the two is the same defect as a number without its window.
+- **Aim is inferred from the model, and the inference is stated in one place.**
+  The dish will not answer directly: `dish_get_context`, which carries the
+  actuator flag, is `PermissionDenied` to an unauthenticated caller and
+  `get_status` has no such field. `classifyHardware` in dashboard.go is where
+  "rev3 is a Gen2, and a Gen2 has motors" is written down for both surfaces.
+- **An unplaceable model says nothing.** It keeps its raw string and the aim
+  clause is dropped entirely rather than guessed. Telling someone with a
+  motorized dish to go turn it by hand is the one failure here with a cost
+  outside the screen.
+- **It sits in the header, not the hero.** The hero's lines are about this
+  session — uptime, boots, firmware — and the hardware is the one fact that
+  never changes between polls. The run between the app name and the clock was
+  the only place with room for a picture.
+- **The picture is drawn, not shipped.** SpaceX's product renders and the
+  Starlink marks are theirs; a Store submission is the wrong place to carry
+  someone else's product photography. `DishGlyph` is one silhouette — a flat
+  panel on a stem — which is a true outline of the Mini and both Standards
+  alike, since they differ in size rather than in shape. The generation is
+  written beside it in words rather than mimed in geometry.
+
+### Scrubbing a sparkline
+
+Press and drag along any trace: a rule marks the column, a dot lands on each
+trace that has a sample there, the trailing figure becomes the value under the
+pointer, and the heading becomes its age. Release clears it.
+
+- **It is a press, not a hover.** Hover tracking and `.help` both fail in this
+  non-activating panel — see *Tooltips are not a place to put information*. A
+  click is the one thing the panel is known to receive.
+- **The marker is cleared on release rather than pinned.** The series shift left
+  every poll, so a marker that outlived the gesture would sit on a different
+  second a second later while still captioned with the old age.
+- **A scrubbed figure is a sample, not a statistic**, which is the only reason
+  the `↓↑` row may show one at all. Its idle trailing stays empty: a mean there
+  reads as capability, and naming one second of the trace claims nothing of the
+  sort.
+- **Ages come from the column, not from a clock.** The dish records one sample
+  per second, so a column distance *is* an age in seconds.
 
 Ping keeps a mean rather than a max because a maximum surfaces isolated spikes
 rather than the experience. Drop gets the opposite treatment — its one-second
@@ -167,12 +279,14 @@ useless — so the mean is the headline and the worst second is detail.
 | Battery popover draw heading | `Draw · last %@` — same window control, same `seriesSeconds`; both surfaces plot the same series and must describe it identically |
 | A spark row whose series is empty | *(omit the row — see `shortestSeries` below)* |
 | Window picker | `60s` `5m` `15m` — 60 s stays in seconds; `1m` beside `5m` and `15m` reads as a broken scale |
+| Spark section heading, while a row is scrubbed | `%@ ago` from the marked column, or `now` at the newest sample |
 | Ping spark row label | `Ping ms` |
-| Down spark row label | `↓ Mbps` — never the word "Down", which beside "Ping" reads as *outage* |
+| Throughput spark row label | `↓↑ Mbps` — never the word "Down", which beside "Ping" reads as *outage*. The arrows carry the trace colours and are the chart's only legend, so they are built from the traces actually drawn |
 | Power spark row label | `Power W` |
 | Ping spark trailing | `avg %d ms` |
-| Down spark trailing | *(remove — the footer carries the honest peak)* |
+| Throughput spark trailing | *(empty — the footer carries the honest peak)* |
 | Power spark trailing | `avg %.1f W` |
+| Any spark trailing, while that row is scrubbed | the sample under the pointer in the row's unit: `31 ms`, `23.4 W`, `↓143 ↑14` — each throughput figure in its trace's colour |
 | Power grid sub-label | `%.1f W session` |
 | Session footer | `Observed %@ · ping %d · %d%% clean · peak ↓%d ↑%d · %.1f W` |
 | Session footer, second line when outages > 0 | `%d outages · %@ dark · longest %@` |
@@ -241,6 +355,8 @@ collected, which is the app's cue to hide the footer.
 | Field | Meaning |
 |---|---|
 | `seriesSeconds` | samples the sparkline series actually carry — **not** the window requested; see the reversal note under *Windows* |
+| `hardwareShort` | model with its generation — `Standard Gen2`, `Mini`, or the raw string when unplaceable |
+| `hardwareAim` | `motorized`, `manual`, or `""` — inferred from the model, since the dish will not say; `""` renders as nothing |
 | `obsSeconds` | samples actually integrated this boot |
 | `obsCoverage` | `obsSeconds ÷ uptime`, 0..1 |
 | `sessPingAvg` | ms, seconds with a returned packet only |
@@ -343,6 +459,38 @@ Rules that are load-bearing rather than cosmetic:
   refuses to produce.
 - **The tooltip carries every headline number**, whichever ones the user left
   out of the bar.
+
+### The bar must not quote a reading it does not have (2026-08-15)
+
+An unreachable dish is not a failed poll. `offlineDashboard` restores the last
+snapshot's ping and leaves throughput at zero, and the helper returns it as a
+*success* — so the popover dimmed itself and said "no dish at this address"
+while the bar beside it read `31ms ↓0.0 ↑0.0`. Both halves were false in
+different directions: a stale ping presented as current, and a zero presented as
+a measurement of an idle link. A failing poll (`.stale`) is worse still, because
+the frozen snapshot keeps the signal score too and the glyph stayed at four lit
+bars over a dead link.
+
+The popover does not need this rule — it dims and desaturates the whole panel
+and its footer says why. The bar is a template image with room for neither, so
+its own numbers have to carry it.
+
+| State | Bar shows |
+|---|---|
+| Ping / Download / Upload / Signal / Power | `—`, `↓—`, `↑—` — the arrows stay so the bar keeps its shape and the dashes keep their identity |
+| Ping graph | a dashed midline — blank reads as a rendering fault, the last trace reads as a live link |
+| Signal bars / dish arc glyph | drawn at zero |
+| Energy, Battery % | **unchanged** — a running total does not become false when the dish stops answering, it stops growing. Energy is watt-hours already measured; the bank percentage comes from the CLI's own anchor |
+
+The gate is `Quality.showsLiveReadings`, which is **not** `isTrustworthy`. The
+difference is `.sample`: fabricated data is wrong about the world but internally
+current, and the render harness and design demo exist to look at it. `.loading`
+is on the dashed side — the neutral decode defaults would otherwise render a
+first frame of `0ms ↓0.0 ↑0.0`.
+
+Dashes rather than dropping the fields: dropping them reflows the bar on every
+outage, and a bar configured with nothing else would collapse to zero width,
+which is the one unrecoverable state this document already forbids.
 
 ### The ping graph costs a redraw per poll
 

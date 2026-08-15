@@ -37,8 +37,9 @@ func runStatus(ctx context.Context) error {
 
 	fmt.Printf("State:        %s\n", state)
 	fmt.Printf("Uptime:       %.1f h  (%ds, boots=%d)\n", float64(uptime)/3600, uptime, s.DeviceInfo.Bootcount)
-	fmt.Printf("Hardware:     %s   class=%s   mobility=%s   country=%s\n",
-		s.DeviceInfo.HardwareVersion, dashIf(s.ClassOfService),
+	fmt.Printf("Hardware:     %s%s   class=%s   mobility=%s   country=%s\n",
+		s.DeviceInfo.HardwareVersion, hardwareNote(s.DeviceInfo.HardwareVersion),
+		dashIf(s.ClassOfService),
 		dashIf(s.MobilityClass), dashIf(s.DeviceInfo.CountryCode))
 	fmt.Printf("Software:     %s   swupdate=%s\n",
 		s.DeviceInfo.SoftwareVersion, dashIf(s.SoftwareUpdateState))

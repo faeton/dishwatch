@@ -89,9 +89,9 @@ struct MenuBarLabel: View {
             onBattery: d.onBattery,
             bankPct: MenuBarIconContent.bankPercent(d),
             text: store.menuBarText,
-            litBars: SignalBars.litBars(fraction: Double(d.signalScore) / 100),
+            litBars: SignalBars.litBars(fraction: store.menuBarSignalFraction),
             scale: backingScale(),
-            spark: store.showsMenuBarSpark ? MenuBarSpark.plotted(d.pingSeries) : nil
+            spark: store.showsMenuBarSpark ? MenuBarSpark.plotted(store.menuBarSparkValues) : nil
         )
         if key == cacheKey, let img = cacheImage { return img }
         let img = render(store: store)
@@ -137,7 +137,7 @@ struct MenuBarIconContent: View {
         HStack(spacing: 4) {
             glyph(useBattery: useBattery, d: d)
             if store.showsMenuBarSpark {
-                MenuBarSpark(values: d.pingSeries, color: ink)
+                MenuBarSpark(values: store.menuBarSparkValues, color: ink)
             }
 
             ForEach(store.menuBarTexts) { item in
@@ -163,8 +163,11 @@ struct MenuBarIconContent: View {
 
     @ViewBuilder
     private func glyph(useBattery: Bool, d: DishData) -> some View {
+        // `store.menuBarSignalFraction`, not `d.signalScore`: on a failed poll
+        // the last good score is still sitting in `data`, and four lit bars over
+        // a dead link is the same lie as a stale ping beside them.
         let bars = SignalBars(color: ink, height: 12, barWidth: 2.4,
-                              fraction: Double(d.signalScore) / 100)
+                              fraction: store.menuBarSignalFraction)
         if useBattery {
             BatteryGlyph(fraction: Double(Self.bankPercent(d)) / 100,
                          color: ink, width: 20, height: 11)
@@ -216,7 +219,19 @@ struct MenuBarSpark: View {
     var body: some View {
         let pts = Self.plotted(values)
         Canvas { ctx, size in
-            guard pts.count > 1 else { return }
+            // No trace to draw — an unreachable dish, a failing poll, or the
+            // first second after launch. A dashed midline keeps the item's width
+            // (so it stays clickable) and reads as *no data*, where either
+            // alternative reads as data: blank space looks like a rendering
+            // fault, and the last good trace looks like a live link.
+            guard pts.count > 1 else {
+                var flat = Path()
+                flat.move(to: CGPoint(x: 0, y: size.height / 2))
+                flat.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                ctx.stroke(flat, with: .color(color),
+                           style: StrokeStyle(lineWidth: 1.2, lineCap: .butt, dash: [2, 2]))
+                return
+            }
             let mn = pts.min() ?? 0
             let mx = pts.max() ?? 1
             // A flat trace is a real reading, not a divide-by-zero: floor the

@@ -220,6 +220,31 @@ final class ContractStrictnessTests: XCTestCase {
         XCTAssertThrowsError(try decode(#"{"schemaVersion":1,"state":42}"#))
     }
 
+    /// The aim value is the one field on this contract whose wrong answer sends
+    /// someone outside to a mast, so every way of not knowing has to land on
+    /// `.unknown` — and `.unknown` has to render as silence, which is what an
+    /// empty `label` buys.
+    func testHardwareAimDecoding() throws {
+        XCTAssertEqual(try decode(#"{"schemaVersion":1,"state":"Connected","hardwareAim":"motorized"}"#).hardwareAim,
+                       .motorized)
+        XCTAssertEqual(try decode(#"{"schemaVersion":1,"state":"Connected","hardwareAim":"manual"}"#).hardwareAim,
+                       .manual)
+        // An older helper that predates the field, and a model its table cannot
+        // place, arrive as the same two shapes.
+        XCTAssertEqual(try decode(#"{"schemaVersion":1,"state":"Connected"}"#).hardwareAim, .unknown)
+        XCTAssertEqual(try decode(#"{"schemaVersion":1,"state":"Connected","hardwareAim":""}"#).hardwareAim,
+                       .unknown)
+        // A value from a *newer* helper must degrade, not fail the snapshot —
+        // the rest of the payload is still good.
+        let future = try decode(#"{"schemaVersion":1,"state":"Connected","hardwareAim":"gimbal","pingMs":21}"#)
+        XCTAssertEqual(future.hardwareAim, .unknown)
+        XCTAssertEqual(future.pingMs, 21, "one unknown enum must not cost the whole snapshot")
+
+        XCTAssertTrue(DishAim.unknown.label.isEmpty, "not knowing is said by saying nothing")
+        XCTAssertFalse(DishAim.motorized.label.isEmpty)
+        XCTAssertFalse(DishAim.manual.label.isEmpty)
+    }
+
     func testMetricsStayLenient() throws {
         // Additive and partial payloads must still work: only the two keys
         // above are strict, or every new Go field becomes a breaking change.

@@ -33,11 +33,18 @@ type Dashboard struct {
 	// has no envelope at all, which is the other reason this belongs here.
 	SchemaVersion int `json:"schemaVersion"`
 
-	State             string  `json:"state"`
-	SignalScore       int     `json:"signalScore"`
-	UptimeHours       float64 `json:"uptimeHours"`
-	Boots             int     `json:"boots"`
-	HardwareShort     string  `json:"hardwareShort"`
+	State         string  `json:"state"`
+	SignalScore   int     `json:"signalScore"`
+	UptimeHours   float64 `json:"uptimeHours"`
+	Boots         int     `json:"boots"`
+	HardwareShort string  `json:"hardwareShort"`
+	// How the panel gets pointed: "motorized", "manual", or "" for a model
+	// this build does not recognise. Derived from the model name because the
+	// dish will not say — `dish_get_context`, which carries the actuator flag
+	// directly, answers PermissionDenied to an unauthenticated caller, and
+	// `get_status` has no such field at any permission level. See
+	// classifyHardware for why that inference is sound enough to display.
+	HardwareAim       string  `json:"hardwareAim"`
 	DeviceID          string  `json:"deviceId"`
 	Firmware          string  `json:"firmware"`
 	DownMbps          float64 `json:"downMbps"`
@@ -240,6 +247,7 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 		UptimeHours:   float64(s.DeviceState.UptimeS) / 3600,
 		Boots:         int(s.DeviceInfo.Bootcount),
 		HardwareShort: hardwareShort(s.DeviceInfo.HardwareVersion),
+		HardwareAim:   classifyHardware(s.DeviceInfo.HardwareVersion).Aim,
 		DeviceID:      deviceID(s),
 		Firmware:      trimFirmware(s.DeviceInfo.SoftwareVersion),
 		DownMbps:      round1(s.DownlinkThroughputBps / 1e6),
@@ -383,17 +391,89 @@ func deviceID(s *dish.Status) string {
 	return s.DeviceInfo.HardwareVersion
 }
 
-func hardwareShort(hw string) string {
+// Aim values for Dashboard.HardwareAim. The empty string is a real case and
+// not a bug: a model this table has never heard of gets no claim at all, which
+// the app renders as nothing. Telling someone with an unlisted dish to go turn
+// it by hand is worse than staying quiet.
+const (
+	aimMotorized = "motorized"
+	aimManual    = "manual"
+	aimUnknown   = ""
+)
+
+// dishHardware is everything the `hardwareVersion` string says about the
+// physical unit: a short display name, and whether the panel aims itself.
+type dishHardware struct {
+	Name string
+	Aim  string
+}
+
+// classifyHardware reads the model out of a `deviceInfo.hardwareVersion`
+// string ("rev3_proto2", "mini1_panda_prod1").
+//
+// Aim is inferred from the model rather than read from the dish, because the
+// dish does not offer it: `dish_get_context` — the call that carries the
+// actuator flag — is PermissionDenied to an unauthenticated caller, and
+// `get_status` has no equivalent field. The inference is sound because the
+// motors are a property of the model and nothing else: every rev1/rev2/rev3
+// panel has them, no Gen3, Mini or flat High Performance panel does.
+//
+// Which is why the generation is now *in* the name. "Standard" covered both
+// rev3 and rev4, and those are the two units that differ on exactly the
+// question this function exists to answer — one aims itself, the other is
+// aimed by hand — so the one label people read said nothing about the one
+// thing that distinguishes them.
+func classifyHardware(hw string) dishHardware {
 	l := strings.ToLower(hw)
 	switch {
 	case strings.Contains(l, "mini"):
-		return "Mini"
-	case strings.Contains(l, "rev3"), strings.Contains(l, "rev4"), strings.Contains(l, "standard"):
-		return "Standard"
+		return dishHardware{"Mini", aimManual}
+	case strings.HasPrefix(l, "hp"):
+		// Flat High Performance. Prefix, not substring: "hp" is two letters
+		// and would otherwise match somewhere inside an unrelated model name.
+		return dishHardware{"High Performance", aimManual}
+	case strings.Contains(l, "rev1"):
+		return dishHardware{"Round Gen1", aimMotorized}
+	case strings.Contains(l, "rev2"), strings.Contains(l, "rev3"):
+		// Both are the rectangular Gen2 panel on its motorized kickstand.
+		return dishHardware{"Standard Gen2", aimMotorized}
+	case strings.Contains(l, "rev4"):
+		return dishHardware{"Standard Gen3", aimManual}
+	case strings.Contains(l, "standard"):
+		// A name that says "standard" and no generation. Gen2 and Gen3 are
+		// both called that and only one has motors, so claim nothing.
+		return dishHardware{"Standard", aimUnknown}
 	case hw == "":
-		return "?"
+		return dishHardware{"?", aimUnknown}
 	default:
-		return hw
+		return dishHardware{hw, aimUnknown}
+	}
+}
+
+func hardwareShort(hw string) string { return classifyHardware(hw).Name }
+
+// hardwareNote is the gloss the CLI hangs off a raw model string:
+// `rev3_proto2  (Standard Gen2, self-aiming)`. Empty when the model is one the
+// table cannot place, so an unlisted dish keeps its raw string and gets no
+// invented reading of it.
+func hardwareNote(hw string) string {
+	h := classifyHardware(hw)
+	if h.Aim == aimUnknown {
+		return ""
+	}
+	return fmt.Sprintf("  (%s, %s)", h.Name, aimPhrase(h.Aim))
+}
+
+// aimPhrase is how the CLI says an aim value. The app has its own wording; a
+// terminal line and a 11-point label are not the same writing problem.
+func aimPhrase(aim string) string {
+	switch aim {
+	case aimMotorized:
+		return "self-aiming"
+	case aimManual:
+		return "aim by hand"
+	default:
+		return ""
 	}
 }
 

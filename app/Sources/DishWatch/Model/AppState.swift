@@ -215,14 +215,32 @@ final class AppState: ObservableObject {
     /// sparkline is not here — it is not text — and a field with nothing to say
     /// right now (battery off a bank) drops out rather than rendering a zero.
     var menuBarTexts: [MenuBarItem] {
-        MenuBarField.allCases.compactMap { f in
-            guard menuBarFields.contains(f), let t = f.text(data) else { return nil }
+        let live = quality.showsLiveReadings
+        return MenuBarField.allCases.compactMap { f in
+            guard menuBarFields.contains(f), let t = f.text(data, live: live) else { return nil }
             return MenuBarItem(field: f, text: t)
         }
     }
 
     /// Whether the bar should draw the ping sparkline.
     var showsMenuBarSpark: Bool { menuBarFields.contains(.pingSpark) }
+
+    /// The trace the bar plots — empty when there is no live reading behind it,
+    /// which `MenuBarSpark` draws as a dashed midline rather than as a frozen
+    /// shape that keeps implying a link.
+    ///
+    /// Emptied rather than hidden: the status item must never shrink to zero
+    /// width, or there is nothing left to click to undo the setting.
+    var menuBarSparkValues: [Double] {
+        quality.showsLiveReadings ? data.pingSeries : []
+    }
+
+    /// How full the bar's signal glyph draws. Zero without a live reading —
+    /// on a failed poll the last snapshot's score is still in `data`, so the
+    /// glyph kept four lit bars over a dead link.
+    var menuBarSignalFraction: Double {
+        quality.showsLiveReadings ? Double(data.signalScore) / 100 : 0
+    }
 
     /// Everything the status item renders as text, joined — one string is all
     /// the glyph cache needs to compare, and all the tooltip needs to quote.
@@ -300,6 +318,25 @@ final class AppState: ObservableObject {
             switch self {
             case .live, .disabled: return true
             default:               return false
+            }
+        }
+
+        /// Whether the menu bar may quote link readings as current.
+        ///
+        /// Not `isTrustworthy`, and the difference is `.sample`: fabricated data
+        /// is wrong about the world but is internally current, and the render
+        /// harness and the design demo exist to look at it. Everything else that
+        /// is not trustworthy has the same problem in the bar — a number with no
+        /// live reading behind it — including `.loading`, where the alternative
+        /// is a first frame of `0ms ↓0.0 ↑0.0`.
+        ///
+        /// The popover does not need this: it dims and desaturates the whole
+        /// panel and says why in its footer. The bar is a template image with
+        /// no room for either, so its numbers have to carry it themselves.
+        var showsLiveReadings: Bool {
+            switch self {
+            case .live, .disabled, .sample: return true
+            case .loading, .offline, .stale, .brokenInstall: return false
             }
         }
     }

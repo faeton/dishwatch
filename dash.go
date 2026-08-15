@@ -359,8 +359,9 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 		ui.Hdr, ui.Rst, dotColor, ui.Rst, ui.Val, state,
 		ui.Dim, dashIf(s.ClassOfService), dashIf(s.MobilityClass), dashIf(s.DeviceInfo.CountryCode), ui.Rst,
 		ui.Dim, upH, s.DeviceInfo.Bootcount, ui.Rst)
-	fmt.Fprintf(w, "  %s%s · fw %s%s\n\n",
-		ui.Dim, s.DeviceInfo.HardwareVersion, s.DeviceInfo.SoftwareVersion, ui.Rst)
+	fmt.Fprintf(w, "  %s%s%s · fw %s%s\n\n",
+		ui.Dim, s.DeviceInfo.HardwareVersion, hardwareNote(s.DeviceInfo.HardwareVersion),
+		s.DeviceInfo.SoftwareVersion, ui.Rst)
 
 	// Derived values
 	downMbps := s.DownlinkThroughputBps / 1e6

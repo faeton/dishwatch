@@ -105,6 +105,91 @@ final class MenuBarTests: XCTestCase {
         XCTAssertEqual(s.menuBarText, "31ms ↓143 ↑14")
     }
 
+    // MARK: - no live reading
+
+    private struct Failing: DishProvider {
+        struct Boom: Error {}
+        func poll(window: Int) async throws -> DishData { throw Boom() }
+    }
+
+    /// The bug: an unreachable dish comes back as a *successful* poll carrying
+    /// `offlineDashboard`, which restores the last snapshot's ping and leaves
+    /// throughput at zero. The popover dims itself and says "no dish at this
+    /// address"; the bar went on reading `31ms ↓0.0 ↑0.0` beside it — a stale
+    /// ping presented as current, and a zero presented as a measurement.
+    func testOfflineDishDashesEveryLiveField() async {
+        var d = DishData.sample
+        d.state = .offline
+        d.pingMs = 31          // whatever was last persisted
+        d.downMbps = 0         // what offlineDashboard leaves behind
+        d.upMbps = 0
+        let s = AppState(provider: Fixed(value: d), defaults: scratchDefaults())
+        await s.refresh()
+        s.menuBarFields = [.ping, .down, .up, .signal, .power]
+
+        XCTAssertEqual(s.menuBarText, "— ↓— ↑— — —")
+        XCTAssertEqual(s.menuBarSignalFraction, 0, "four lit bars over a dead link is the same lie")
+        XCTAssertTrue(s.menuBarSparkValues.isEmpty, "a frozen trace keeps implying a link")
+    }
+
+    /// A failing poll freezes the whole snapshot, signal score included, so the
+    /// numbers are *older* than the offline case rather than merely wrong.
+    func testFailingPollDashesEveryLiveField() async {
+        let s = AppState(provider: Failing(), defaults: scratchDefaults())
+        await s.refresh()
+        s.menuBarFields = [.ping, .down, .up]
+
+        XCTAssertEqual(s.menuBarText, "— ↓— ↑—")
+    }
+
+    /// Before the first poll there is nothing to quote either — and the neutral
+    /// decode defaults would have rendered as `0ms ↓0.0 ↑0.0`, which reads as a
+    /// dead link rather than as an app that has not looked yet.
+    func testLoadingDashesEveryLiveField() {
+        let s = AppState(provider: Fixed(value: .sample), defaults: scratchDefaults())
+        s.menuBarFields = [.ping, .down, .up]
+        XCTAssertEqual(s.menuBarText, "— ↓— ↑—")
+    }
+
+    /// Running totals do not become false when the dish stops answering; they
+    /// stop growing. Energy is watt-hours already measured, and the bank
+    /// percentage comes from the CLI's own anchor rather than from the dish.
+    func testRunningTotalsSurviveTheDishGoingAway() async {
+        var d = DishData.sample
+        d.state = .offline
+        d.energyWhSinceBoot = 115
+        d.bankAnchored = true
+        d.bankPct = 78
+        let s = AppState(provider: Fixed(value: d), defaults: scratchDefaults())
+        await s.refresh()
+        s.menuBarFields = [.energy, .battery]
+
+        XCTAssertEqual(s.menuBarText, "115Wh 78%")
+    }
+
+    /// Sample data is wrong about the world but internally current, and the
+    /// render harness and design demo exist to look at it. Dashing it out would
+    /// blank every screenshot the harness takes.
+    func testSampleDataStillShowsNumbers() async {
+        let s = AppState(provider: SampleProvider(), defaults: scratchDefaults())
+        await s.refresh()
+        s.menuBarFields = [.ping, .down]
+
+        XCTAssertFalse(s.menuBarText.contains("—"))
+        XCTAssertGreaterThan(s.menuBarSignalFraction, 0)
+    }
+
+    /// A dish that answers and reports itself disabled has given a real reading.
+    func testDisabledDishKeepsItsNumbers() async {
+        var d = DishData.sample
+        d.state = .disabled
+        let s = AppState(provider: Fixed(value: d), defaults: scratchDefaults())
+        await s.refresh()
+        s.menuBarFields = [.ping]
+
+        XCTAssertEqual(s.menuBarText, "31ms")
+    }
+
     // MARK: - migration
 
     /// An upgrading user had signal bars with the score appended. That is
