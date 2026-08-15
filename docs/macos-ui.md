@@ -168,9 +168,31 @@ with two traces rather than a fourth row, and two rules make that honest:
   become two full-height traces of noise, which is utilization drawn as
   amplitude. Throughput has a true zero, so this row alone uses `0..max`; ping
   and power keep auto-ranging, because for them the variation *is* the news.
-- **Download keeps the gradient; upload is a line, slightly thicker.** A low
-  trace inside another trace's fill dissolves into it, which is how a real
-  14 Mbps upload comes to read as no upload at all.
+- **Download keeps the gradient; upload is a line.** A low trace inside another
+  trace's fill dissolves into it, which is how a real 14 Mbps upload comes to
+  read as no upload at all.
+
+The ink is fixed, not a setting, and these are the numbers:
+
+| Trace | Colour | Weight |
+|---|---|---|
+| ↓ download | `0x4B8DF8` | 1.4 pt line + fill at 50% |
+| ↑ upload | `0x9B90D9` | 1.5 pt line at 85%, no fill |
+
+Both were louder once and both were wrong for the same reason. Upload's first
+violet (`0xA78BFA`) at full strength on a 1.7 pt stroke made the *quieter* of
+the two directions draw the heaviest ink in the block, on a panel whose entire
+palette is otherwise muted — beside cyan ping and amber power it read as an
+alert. The hue is what separates the directions, so the hue stayed and the
+chroma went; the download fill is what carries the pair, so the line above it
+does not also have to shout.
+
+**Offered as a Settings slider and declined, 2026-08-15.** An opacity control
+is a knob whose main job is undoing a bad default, and the fix for a bad
+default is a better default. Per-direction opacity would additionally make
+reachable exactly the two states this row is designed to prevent: an upload so
+faint it reads as absent, and a pair loud enough to be unreadable where they
+cross.
 
 The cost is real and accepted: while download is an order of magnitude larger,
 upload sits near the floor and shows proportion rather than shape. **Scrubbing

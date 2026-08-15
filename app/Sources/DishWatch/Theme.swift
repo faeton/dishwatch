@@ -22,7 +22,13 @@ enum DW {
     /// only ever appeared in separate cells — and stopped being survivable the
     /// moment both series went onto one axis, where the colour is the *only*
     /// thing saying which trace is which.
-    static let up    = Color(hex: 0xA78BFA)
+    ///
+    /// Muted from the first violet it got (`0xA78BFA`), which was the most
+    /// saturated colour on a panel whose whole palette is quiet: beside cyan
+    /// ping and amber power it read as an alert rather than as a second
+    /// throughput line. The hue is what separates it from download, so the hue
+    /// stays and the chroma goes — same ~40° of separation, none of the shout.
+    static let up    = Color(hex: 0x9B90D9)
     static let amber = Color(hex: 0xFFB340) // power / battery
     static let amberA = Color(hex: 0xFF9F0A)
     static let amberB = Color(hex: 0xFFC44D)

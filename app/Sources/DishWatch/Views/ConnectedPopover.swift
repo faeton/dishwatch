@@ -344,10 +344,17 @@ struct ConnectedPopover: View {
             // in, both directions a few Mbps and crossing constantly, they are
             // not, and the body under the download line is what tells them
             // apart without a legend lookup.
+            //
+            // The upload stroke went the other way: 1.7 pt of full-strength
+            // violet was the heaviest ink in the block, so the quieter of the
+            // two directions was drawing the loudest line. The fill under
+            // download is what carries the pair now, which is exactly what it
+            // was widened for — so the line above it does not also have to
+            // shout.
             return [SparkTrace(symbol: "↓", values: d.downSeries, color: DW.down,
                                fillOpacity: 0.5),
-                    SparkTrace(symbol: "↑", values: d.upSeries, color: DW.up,
-                               filled: false, width: 1.7)]
+                    SparkTrace(symbol: "↑", values: d.upSeries, color: DW.up.opacity(0.85),
+                               filled: false, width: 1.5)]
         case .power:
             return [SparkTrace(values: d.powerSeries, color: DW.amber)]
         }
