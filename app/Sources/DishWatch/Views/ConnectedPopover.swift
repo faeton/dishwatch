@@ -252,7 +252,16 @@ struct ConnectedPopover: View {
                         .font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(DW.amber.opacity(0.85))
                 }
-                Text("\(Self.bytes(o.downBytes)) ↓ · \(Self.bytes(o.upBytes)) ↑")
+                // Energy sits with the other session totals, not with the live
+                // Power cell: it is a total for this block's window, computed
+                // from this block's own samples.
+                // The bolt is an SF Symbol rather than the ⚡ emoji, which
+                // renders in full colour and breaks a line that is otherwise
+                // uniformly dimmed. As a symbol it inherits the foreground
+                // style, like the arrows beside it.
+                (Text("\(Self.bytes(o.downBytes)) ↓ · \(Self.bytes(o.upBytes)) ↑ · ")
+                 + Text(Image(systemName: "bolt.fill"))
+                 + Text(" \(Self.wh(o.energyWh))"))
                     .font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(DW.textA(0.45))
             }
@@ -276,6 +285,15 @@ struct ConnectedPopover: View {
         if m < 60 { return "\(m)m" }
         if h < 24 { return h > 0 && m % 60 > 0 ? "\(h)h \(m % 60)m" : "\(h)h" }
         return d > 0 && h % 24 > 0 ? "\(d)d \(h % 24)h" : "\(d)d"
+    }
+
+    /// Watt-hours for the Observed line: whole numbers past 10 Wh, one decimal
+    /// below it, and kWh once the figure outgrows four digits — a dish left up
+    /// for a month draws past 20 000 Wh, which is a number nobody parses.
+    static func wh(_ v: Double) -> String {
+        if v >= 10_000 { return String(format: "%.1f kWh", v / 1000) }
+        if v >= 10 { return "\(Int(v.rounded())) Wh" }
+        return String(format: "%.1f Wh", v)
     }
 
     static func bytes(_ b: Double) -> String {

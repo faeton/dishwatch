@@ -15,7 +15,7 @@ final class ObservedStatsTests: XCTestCase {
         "sessOutages": 11, "sessOutageSeconds": 143, "sessLongestOutage": 58,
         "sessDownPeak": 186.0, "sessUpPeak": 41.0,
         "sessDownBytes": 4.2e9, "sessUpBytes": 0.6e9,
-        "sessPowerAvg": 23.8, "sessPowerPeak": 48.1,
+        "sessPowerAvg": 23.8, "sessPowerPeak": 48.1, "sessEnergyWh": 53.2,
     ]
 
     /// Every payload carries the current schema version and a state, because
@@ -104,7 +104,7 @@ final class ObservedStatsTests: XCTestCase {
          "obsSeconds":8040,"obsCoverage":0.94,"sessPingAvg":29,"sessCleanPct":92,
          "sessDegradedPct":6,"sessDarkPct":2,"sessOutages":11,"sessOutageSeconds":143,
          "sessLongestOutage":58,"sessDownPeak":1e400,"sessUpPeak":41,
-         "sessDownBytes":4.2e9,"sessUpBytes":6e8,"sessPowerAvg":23.8,"sessPowerPeak":48.1}
+         "sessDownBytes":4.2e9,"sessUpBytes":6e8,"sessPowerAvg":23.8,"sessPowerPeak":48.1,"sessEnergyWh":53.2}
         """
         let d = try JSONDecoder().decode(DishData.self, from: Data(overflowing.utf8))
         XCTAssertNil(d.observed, "an out-of-range number must not reach the footer")

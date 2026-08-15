@@ -109,6 +109,11 @@ type Dashboard struct {
 	SessUpBytes       float64 `json:"sessUpBytes"`
 	SessPowerAvg      float64 `json:"sessPowerAvg"`
 	SessPowerPeak     float64 `json:"sessPowerPeak"`
+	// Energy across the samples this block describes — PowerSum is watt-seconds,
+	// so it is an exact integration rather than an average times a duration.
+	// Distinct from EnergyWhSinceBoot above, which is a separate accumulator
+	// over a separate window; the two answer different questions.
+	SessEnergyWh float64 `json:"sessEnergyWh"`
 
 	DishAddr        string  `json:"dishAddr"`
 	OnBattery       bool    `json:"onBattery"`
@@ -301,6 +306,7 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 		d.SessUpBytes = st.UpBytes()
 		d.SessPowerAvg = round1(st.PowerAvg())
 		d.SessPowerPeak = round1(st.PowerMax)
+		d.SessEnergyWh = round1(st.EnergyWh())
 	}
 
 	// Power-bank: only populated when an anchor is set (sl pb). With pb

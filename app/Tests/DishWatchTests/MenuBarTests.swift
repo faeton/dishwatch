@@ -451,3 +451,27 @@ extension MenuBarTests {
         XCTAssertFalse(AppState.defaultFields.contains(.energy))
     }
 }
+
+extension EnergyLineTests {
+    /// Watt-hours on the Observed line. A dish left up for a month draws past
+    /// 20 000 Wh, which is a figure nobody parses at a glance.
+    func testWattHourFormatting() {
+        XCTAssertEqual(ConnectedPopover.wh(3.42), "3.4 Wh", "below 10 the tenths still say something")
+        XCTAssertEqual(ConnectedPopover.wh(53.4), "53 Wh")
+        XCTAssertEqual(ConnectedPopover.wh(267.6), "268 Wh")
+        XCTAssertEqual(ConnectedPopover.wh(9_999), "9999 Wh")
+        XCTAssertEqual(ConnectedPopover.wh(21_400), "21.4 kWh")
+    }
+
+    /// The Observed block's energy is its *own* — integrated from the samples
+    /// that block describes — and must not be the since-boot accumulator, which
+    /// covers a different window. Two different questions on one line would
+    /// invite reading either as the other.
+    func testObservedEnergyIsNotTheSinceBootTotal() {
+        let o = DishData.sample.observed
+        XCTAssertNotNil(o)
+        XCTAssertEqual(o?.energyWh, 53.2)
+        XCTAssertNotEqual(o?.energyWh, DishData.sample.energyWhSinceBoot,
+                          "they are separate accumulators over separate windows")
+    }
+}

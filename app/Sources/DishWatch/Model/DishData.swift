@@ -153,6 +153,11 @@ struct ObservedStats: Decodable, Sendable, Equatable {
     let upBytes: Double
     let powerAvg: Double
     let powerPeak: Double
+    /// Energy across exactly the samples this block describes. Not
+    /// `DishData.energyWhSinceBoot`, which is a separate accumulator over a
+    /// separate window — putting *that* on this block's line would state a
+    /// total for a span it does not cover.
+    let energyWh: Double
 
     enum CodingKeys: String, CodingKey {
         case seconds       = "obsSeconds"
@@ -170,6 +175,7 @@ struct ObservedStats: Decodable, Sendable, Equatable {
         case upBytes       = "sessUpBytes"
         case powerAvg      = "sessPowerAvg"
         case powerPeak     = "sessPowerPeak"
+        case energyWh      = "sessEnergyWh"
     }
 
     // `sessDropAvg` is deliberately absent. The Go side emits it, but
@@ -201,7 +207,7 @@ struct ObservedStats: Decodable, Sendable, Equatable {
     var isPresentable: Bool {
         guard seconds >= Self.minSeconds else { return false }
         return [coverage, pingAvg, cleanPct, degradedPct, darkPct,
-                downPeak, upPeak, downBytes, upBytes, powerAvg, powerPeak]
+                downPeak, upPeak, downBytes, upBytes, powerAvg, powerPeak, energyWh]
             .allSatisfy(\.isFinite)
     }
 }
@@ -254,7 +260,7 @@ extension DishData {
             outages: 11, outageSeconds: 143, longestOutage: 58,
             downPeak: 186, upPeak: 41,
             downBytes: 4.2e9, upBytes: 0.6e9,
-            powerAvg: 23.8, powerPeak: 48.1)
+            powerAvg: 23.8, powerPeak: 48.1, energyWh: 53.2)
         d.bankPct = 78
         d.bankWh = 67
         d.bankWhLeft = 52.3

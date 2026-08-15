@@ -657,8 +657,13 @@ func renderObserved(w io.Writer, L ui.Layout, st *state.Stats) {
 	fmt.Fprintf(w, "  %sData   %s%s↓ %s  ↑ %s%s\n",
 		ui.Lbl, ui.Rst, ui.Dim, humanBytes(st.DownBytes()), humanBytes(st.UpBytes()), ui.Rst)
 	if st.PowerCount > 0 {
-		fmt.Fprintf(w, "  %sPower  %s%savg %.1f W · peak %.1f W%s\n",
-			ui.Lbl, ui.Rst, ui.Dim, st.PowerAvg(), st.PowerMax, ui.Rst)
+		// The Wh here is this block's own energy, integrated from the same
+		// samples as the average beside it — not the since-boot total on the
+		// Energy line above, which is a different accumulator over a different
+		// window. Two figures, two questions; stating them in one place would
+		// invite reading either as the other.
+		fmt.Fprintf(w, "  %sPower  %s%savg %.1f W · peak %.1f W · %.1f Wh used%s\n",
+			ui.Lbl, ui.Rst, ui.Dim, st.PowerAvg(), st.PowerMax, st.EnergyWh(), ui.Rst)
 	}
 }
 

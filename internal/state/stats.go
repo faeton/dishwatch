@@ -253,6 +253,20 @@ func (s *Stats) PowerAvg() float64 {
 	return s.PowerSum / float64(s.PowerCount)
 }
 
+// EnergyWh is the energy drawn across the samples this accumulator holds.
+//
+// PowerSum is watts summed over 1 Hz samples, so it is already watt-seconds —
+// joules — and the conversion is exact rather than an average multiplied by a
+// duration. That distinction is the point: it makes this figure a property of
+// the same samples as every other number in the Observed block, so the block
+// can state it on the same line as the byte totals without implying a window it
+// does not cover.
+//
+// Deliberately not the same quantity as Snapshot.EnergyWh, which is a
+// since-boot total from a separate accumulator over a separate window. The two
+// answer different questions and will not agree.
+func (s *Stats) EnergyWh() float64 { return s.PowerSum / 3600 }
+
 func (s *Stats) DownPeakMbps() float64 { return s.DownMax / 1e6 }
 func (s *Stats) UpPeakMbps() float64   { return s.UpMax / 1e6 }
 
