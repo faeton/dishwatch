@@ -207,6 +207,52 @@ Everything else the submission needs is in roadmap.md: the scaffolding to cut,
 the Guideline 5.2 trademark exposure, the `PrivacyInfo.xcprivacy` reasons, and
 the non-code work (screenshots, privacy policy URL, export compliance).
 
+## Shipped: v0.2.0, 2026-08-15
+
+`DishWatch-0.2.0.dmg` — universal, notarized and stapled, published at
+[releases/tag/v0.2.0](https://github.com/faeton/dishwatch/releases/tag/v0.2.0)
+with the four CLI tarballs, `checksums.txt`, a goreleaser-updated formula and a
+hand-updated cask. Notes in [release-notes-v0.2.0.md](release-notes-v0.2.0.md).
+
+Both notary submissions Accepted first try. The published DMG, the artifact
+Apple notarized, and the file `curl` fetches from the release URL are the same
+object:
+
+```
+6e602e776a3f236fe97179e2171a1a020fe5e12174403ccb9f51d789d71eeb06
+```
+
+That was checked against the download this time, not just against
+`checksums.txt` — the cask's `sha256` is a claim about what a user receives, so
+it is worth verifying from the user's side of the wire before pushing it.
+
+### The cask upgrade path finally ran
+
+`brew upgrade --cask` is the item the v0.1.3 section listed as never-exercised,
+because there was no earlier version to upgrade from. There is now, and it
+works: 0.1.3 backed up, `/Applications/DishWatch.app` replaced, old version
+purged. Then the real thing rather than a simulation of it — `stapler validate`,
+`spctl accepted / Notarized Developer ID`, launched from `/Applications`, helper
+spawned, and an ESTABLISHED connection to `192.168.100.1:9200`.
+
+The formula upgrade ran too, and `dishwatch json --window 900` returns 900
+samples from the *shipped* binary. Test the CLI by absolute path: `~/.local/bin/sl`
+is a stale repo build that shadows Homebrew in `PATH`.
+
+### Ordering held up
+
+The tag-before-notarize rule this document opens with did its job silently:
+`DishWatch-0.2.0.dmg` carries 0.2.0 in its filename, its
+`CFBundleShortVersionString` and its notarization, because the tag was pushed
+first. Nothing had to be rebuilt.
+
+One thing to know for next time: the Homebrew-managed tap checkout at
+`/opt/homebrew/Library/Taps/faeton/homebrew-tap` had unrelated uncommitted edits
+(another project's cask, plus a formula description fix that goreleaser has since
+made redundant). The cask update was therefore made in a throwaway clone rather
+than in that working copy, which is the right habit regardless — that directory
+belongs to Homebrew, not to this release.
+
 ## Shipped: v0.1.3, 2026-08-14
 
 `DishWatch-0.1.3.dmg` — 11 MB, universal, notarized and stapled, published at
@@ -274,10 +320,10 @@ roadmap.md Phase 2 for the full evidence and its limits.
 **Intel.** The binaries are universal and `lipo` confirms both slices, but
 nothing here has executed the x86_64 slice.
 
-**Cask upgrade.** Install and Gatekeeper assessment are covered; `upgrade` has
-never run, because there is no earlier cask version to upgrade from. Same for
-`--zap` uninstall, whose paths are a best guess until `brew generate-zap` is
-run against a real launched install.
+**Cask upgrade.** ~~Install and Gatekeeper assessment are covered; `upgrade` has
+never run, because there is no earlier cask version to upgrade from.~~ Settled by
+the v0.2.0 release above. `--zap` uninstall is still unverified: its paths are a
+best guess until `brew generate-zap` is run against a real launched install.
 
 ## Settled by the tap CI, 2026-08-14
 
