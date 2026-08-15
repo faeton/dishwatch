@@ -64,6 +64,13 @@ struct DishData: Decodable, Sendable, Equatable {
     var downAvg: Double = 0
     var powerSeries: [Double] = []
     var powerAvg: Double = 0
+    /// How many samples the series above actually carry, straight from the
+    /// helper. **Not** the window that was requested: the dish's ring is only as
+    /// deep as the dish has been up, so a 15-minute request two minutes after a
+    /// reboot comes back with 120 points. Every caption over a sparkline reads
+    /// this, never `historyWindow`, or a freshly-booted dish gets a two-minute
+    /// trace labelled "15 m".
+    var seriesSeconds: Int = 0
 
     var dishAddr: String = ""
 
@@ -227,6 +234,7 @@ extension DishData {
         d.upAvg = 11
         d.powerSeries = [22.6, 23.1, 22.2, 24.0, 21.8, 23.0, 21.2, 24.1, 22.5, 21.9, 23.0, 21.4, 22.6, 20.9, 23.4, 22.3]
         d.powerAvg = 22.8
+        d.seriesSeconds = d.pingSeries.count
         d.dishAddr = "192.168.100.1"
         // Built explicitly, never decoded — the whole point of splitting sample
         // data from decode fallbacks.
@@ -264,6 +272,7 @@ extension DishData {
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
         case pingSeries, pingAvg, downSeries, downMax, downAvg, upSeries, upAvg, powerSeries, powerAvg
+        case seriesSeconds
         case dishAddr, onBattery, bankAnchored, bankPct, bankWh, bankWhLeft, bankSecondsLeft, anchoredAgoText
     }
 
@@ -324,6 +333,10 @@ extension DishData {
         d.upAvg = s(.upAvg, d.upAvg)
         d.powerSeries = s(.powerSeries, d.powerSeries)
         d.powerAvg = s(.powerAvg, d.powerAvg)
+        // Lenient like its neighbours, but with a fallback that stays true: a
+        // helper too old to send this still returns *some* series, and their
+        // length is what it observed. Zero here would caption a real trace "0 s".
+        d.seriesSeconds = s(.seriesSeconds, d.pingSeries.count)
         d.dishAddr = s(.dishAddr, d.dishAddr)
         // Same decoder, not a nested container: the sess*/obs* keys are flat in
         // the payload. All-or-nothing, unlike every line above it.
@@ -340,12 +353,91 @@ extension DishData {
 }
 
 /// Which glyph the menu-bar status item draws.
+///
+/// `dataReadout` is gone. It was the only way to get a number into the bar, so
+/// it had to masquerade as a glyph mode — choosing it meant giving up the signal
+/// arc, and it could only ever show ping. Numbers are `MenuBarField`s now, which
+/// makes "just the ping, no glyph" the ordinary combination `noGlyph` + `[.ping]`
+/// rather than a special case. `AppState` migrates the stored value.
 enum IconMode: String, CaseIterable, Identifiable {
     case signalBars = "Signal bars"
     case dishArc    = "Dish arc"
-    case dataReadout = "Data readout"
     case auto       = "Auto"   // battery on bank, else signal
+    /// Numbers only. Spelled `noGlyph` rather than `none` so it never has to be
+    /// disambiguated from `Optional.none` at a call site.
+    case noGlyph    = "No glyph"
     var id: String { rawValue }
 }
 
-enum DataReadoutKind { case ping, watts }
+/// One value the status item can append after its glyph.
+///
+/// The order of `allCases` is the order they render in — left to right, most
+/// asked-for first — so the bar layout does not depend on the order the user
+/// happened to tick the boxes in, and does not jump around when one is toggled.
+enum MenuBarField: String, CaseIterable, Identifiable, Codable {
+    case pingSpark = "pingSpark"
+    case ping      = "ping"
+    case down      = "down"
+    case up        = "up"
+    case signal    = "signal"
+    case power     = "power"
+    case battery   = "battery"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pingSpark: return "Ping graph"
+        case .ping:      return "Ping"
+        case .down:      return "Download"
+        case .up:        return "Upload"
+        case .signal:    return "Signal score"
+        case .power:     return "Power draw"
+        case .battery:   return "Battery %"
+        }
+    }
+
+    /// Shown beside the title in Settings so the width cost is visible before
+    /// the box is ticked, not after.
+    var note: String? {
+        switch self {
+        case .pingSpark: return "redraws every poll"
+        case .battery:   return "only on a power bank"
+        default:         return nil
+        }
+    }
+
+    /// Throughput for the menu bar: one decimal below 10 Mbps, whole Mbps above.
+    ///
+    /// A flat `Int` rounding read as broken on an idle link — a dish doing
+    /// 0.3 ↓ and 0.4 ↑ rendered `↓0 ↑0`, which says *nothing is flowing* about a
+    /// link that is fine. It is the same trap docs/macos-ui.md records for mean
+    /// throughput, where an idle dish averaging ~0 Mbps reads as a fault. The
+    /// decimal is only spent where it carries that meaning: past 10 Mbps nobody
+    /// reads the tenths, and the menu bar is the one surface where two glyphs of
+    /// width is a real cost.
+    ///
+    /// Rounds *before* choosing the format, so 9.96 renders `10` rather than the
+    /// wider and self-contradicting `10.0`.
+    static func compactMbps(_ v: Double) -> String {
+        let r = (v * 10).rounded() / 10
+        return r >= 10 ? "\(Int(r.rounded()))" : String(format: "%.1f", r)
+    }
+
+    /// What this field renders as, or nil when it has nothing to say right now
+    /// (battery off a bank) or is not text at all (the sparkline).
+    func text(_ d: DishData) -> String? {
+        switch self {
+        case .pingSpark: return nil
+        case .ping:      return "\(Int(d.pingMs))ms"
+        // Unit-less: the arrow already says which direction it is.
+        case .down:      return "↓" + Self.compactMbps(d.downMbps)
+        case .up:        return "↑" + Self.compactMbps(d.upMbps)
+        case .signal:    return "\(d.signalScore)"
+        case .power:     return "\(Int(d.powerW.rounded()))W"
+        // Off a bank there is no percentage to show — and a 0% would read as a
+        // flat battery rather than as "not on one".
+        case .battery:   return d.bankAnchored ? "\(Int(d.bankPct))%" : nil
+        }
+    }
+}

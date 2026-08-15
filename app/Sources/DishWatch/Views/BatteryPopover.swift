@@ -103,14 +103,44 @@ struct BatteryPopover: View {
         .background(DW.cellBG.opacity(0.8))
     }
 
-    private var drawRow: some View {
-        HStack(spacing: 11) {
-            Text("draw").font(.system(size: 11)).foregroundStyle(DW.textA(0.5)).frame(width: 38, alignment: .leading)
-            Spark(values: d.powerSeries, color: DW.amber).frame(height: 22)
-            Text("avg \(d.powerAvg, specifier: "%.1f")").font(.system(size: 11)).monospacedDigit()
-                .foregroundStyle(DW.textA(0.45)).frame(width: 52, alignment: .trailing)
+    /// The power trace, captioned and windowed like the mains popover's.
+    ///
+    /// It had neither. The window is one setting shared by both surfaces — a
+    /// bank user's `powerSeries` is already however wide the last poll asked for
+    /// — so without a caption this row silently changed length, and without a
+    /// control the only way to widen it was to unplug the bank. Both surfaces
+    /// draw from the same series; they should say the same thing about it.
+    @ViewBuilder private var drawRow: some View {
+        if d.powerSeries.count > 1 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    SectionLabel(text: "Draw · last \(ConnectedPopover.span(d.seriesSeconds))").tracking(0.8)
+                    Spacer()
+                    HStack(spacing: 3) {
+                        ForEach(AppState.historyWindows, id: \.self) { secs in
+                            let on = store.historyWindow == secs
+                            Button { store.historyWindow = secs } label: {
+                                Text(ConnectedPopover.span(secs))
+                                    .font(.system(size: 10.5, weight: on ? .semibold : .regular))
+                                    .monospacedDigit()
+                                    .foregroundStyle(on ? Color(hex: 0x04121B) : DW.textA(0.55))
+                                    .padding(.horizontal, 7).padding(.vertical, 2.5)
+                                    .background(on ? DW.amber : Color.white.opacity(0.06),
+                                                in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show the last \(ConnectedPopover.span(secs))")
+                        }
+                    }
+                }
+                HStack(spacing: 11) {
+                    Spark(values: d.powerSeries, color: DW.amber).frame(height: 22)
+                    Text("avg \(d.powerAvg, specifier: "%.1f")").font(.system(size: 11)).monospacedDigit()
+                        .foregroundStyle(DW.textA(0.45)).frame(width: 52, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
         }
-        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
     }
 
     private var linkState: some View {

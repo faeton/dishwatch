@@ -101,7 +101,7 @@ func main() {
 			die(err)
 		}
 	case "json":
-		if err := runJSON(ctx); err != nil {
+		if err := runJSON(ctx, os.Args[2:]); err != nil {
 			die(err)
 		}
 	// Private: the engine the macOS app supervises. Not in the usage line —
@@ -147,7 +147,8 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: sl [status|dash|d|watch|w [sec]|events|ev [N]|history|location|loc|map|reboot|raw '<json>'|speed|pb [pct [wh] | -]|json]")
-	fmt.Fprintln(os.Stderr, "       json — machine-readable snapshot (what the macOS app consumes)")
+	fmt.Fprintln(os.Stderr, "       json [--window sec] — machine-readable snapshot (what the macOS app consumes)")
+	fmt.Fprintln(os.Stderr, "              --window widens the sparkline series off the dish's ring, 60–900 s")
 }
 
 func die(err error) {

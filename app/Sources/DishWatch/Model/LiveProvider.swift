@@ -23,9 +23,9 @@ final class LiveProvider: DishProvider, @unchecked Sendable {
 
     init() { self.binary = Self.locateBinary() }
 
-    func poll() async throws -> DishData {
+    func poll(window: Int) async throws -> DishData {
         guard let binary else { throw LiveError.binaryNotFound }
-        let (out, err, code) = try Self.run(binary, ["json"])
+        let (out, err, code) = try Self.run(binary, ["json", "--window", "\(window)"])
         guard code == 0 else {
             throw LiveError.nonZeroExit(code, String(data: err, encoding: .utf8) ?? "")
         }

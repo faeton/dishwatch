@@ -160,6 +160,10 @@ final class GoldenFixtureTests: XCTestCase {
         XCTAssertNotEqual(d.deviceId, d.hardwareShort)
         XCTAssertEqual(d.pingSeries.count, 60)
         XCTAssertEqual(d.powerSeries.count, 60)
+        // Captured with `json --window 60`, and the CLI reports back what it
+        // actually returned. Every sparkline caption reads this rather than the
+        // window it requested, so it has to survive the wire.
+        XCTAssertEqual(d.seriesSeconds, 60)
 
         // The whole session block survives a round trip through the real CLI.
         let o = try XCTUnwrap(d.observed, "the CLI emitted a complete sess* block; it must decode")

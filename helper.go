@@ -49,7 +49,15 @@ import (
 // data-less success was previously ambiguous enough that the client read one as
 // a dead pipe — see helperResponse.Data — and because `warning` was added. A
 // version bump is cheaper than discovering the disagreement in the field again.
-const helperProtocol = 2
+//
+// Protocol 3 adds `window` to a poll request. On the wire that is a compatible
+// addition — a protocol-2 helper would ignore the field and answer happily — and
+// that is exactly why it needs the bump. Ignoring it means returning 60 samples
+// to a client that asked for 900 and will caption them "15 m", which is the
+// fabricated-window version of every honesty bug this codebase has already
+// fixed once. `seriesSeconds` makes the answer self-describing; the bump makes
+// sure there is an answer to describe.
+const helperProtocol = 3
 
 // helperRequestTimeout bounds one request end to end, including withClient's
 // redial. Without it a request inherits the process context, which has no
@@ -70,6 +78,9 @@ type helperRequest struct {
 	// setAnchor only.
 	Pct *float64 `json:"pct,omitempty"`
 	Wh  *float64 `json:"wh,omitempty"`
+	// poll only: how many seconds of sparkline history to return, clamped to
+	// 60–900 by clampSeriesWindow. Absent means the 60 s default.
+	Window *int `json:"window,omitempty"`
 }
 
 // helperResponse is one line back. Exactly one of Data/Error is meaningful,
@@ -285,7 +296,11 @@ func (h *helper) serve(parent context.Context, req helperRequest) {
 
 	switch req.Op {
 	case "poll":
-		d, warn, err := h.poll(ctx)
+		window := defaultSeriesWindow
+		if req.Window != nil {
+			window = *req.Window
+		}
+		d, warn, err := h.poll(ctx, window)
 		if err != nil {
 			resp.Error = err.Error()
 		} else {
@@ -330,7 +345,7 @@ func (h *helper) serve(parent context.Context, req helperRequest) {
 //
 // The second return is a non-fatal warning: the dashboard is good but something
 // alongside it was not, e.g. the accumulators could not be written.
-func (h *helper) poll(ctx context.Context) (Dashboard, string, error) {
+func (h *helper) poll(ctx context.Context, window int) (Dashboard, string, error) {
 	var d Dashboard
 	var warn string
 	err := h.withClient(ctx, func(c *dish.Client) error {
@@ -341,7 +356,7 @@ func (h *helper) poll(ctx context.Context) (Dashboard, string, error) {
 		if persistErr != nil {
 			warn = "state not saved: " + persistErr.Error()
 		}
-		d = buildDashboard(s, hist, h.addr)
+		d = buildDashboard(s, hist, h.addr, window)
 		return nil
 	})
 	if err == nil {

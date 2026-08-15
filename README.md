@@ -1,9 +1,10 @@
 # dishwatch
 
 Turns your Starlink dish's local gRPC API into a live terminal dashboard —
-connection, signal, aim, GPS, power draw, and 60-second sparklines for ping,
-drop, throughput, and watts. Logs reboots and dropouts so you can tell after the
-fact whether the dish rebooted or your Wi-Fi died.
+connection, signal, aim, GPS, power draw, and sparklines for ping, drop,
+throughput, and watts over the dish's own history ring (60 s by default, up to
+15 min). Logs reboots and dropouts so you can tell after the fact whether the
+dish rebooted or your Wi-Fi died.
 
 Tested on **Starlink Mini** (`mini1_panda_prod1`, fw `2026.04.07.mr77639.1`).
 Other generations probably work but some fields may differ.
@@ -81,6 +82,7 @@ sl reboot             # reboot the dish
 sl pb [pct [wh] | -]  # anchor power-bank % (and optional Wh); `-` clears; no args = show
 sl raw '<json>'       # send an arbitrary gRPC request
 sl json               # one snapshot as JSON (what the macOS app consumes)
+sl json --window 900   # …with 15 min of sparkline history instead of 60 s (max = the dish's ring)
 ```
 
 ### Watch mode

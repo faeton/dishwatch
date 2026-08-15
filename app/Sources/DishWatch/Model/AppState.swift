@@ -15,7 +15,35 @@ final class AppState: ObservableObject {
 
     // settings (persisted to UserDefaults)
     @Published var iconMode: IconMode { didSet { defaults.set(iconMode.rawValue, forKey: "iconMode") } }
-    @Published var showValueNextToIcon: Bool { didSet { defaults.set(showValueNextToIcon, forKey: "showValue") } }
+    /// Which values the status item appends after its glyph. Rendered in
+    /// `MenuBarField.allCases` order, not tick order, so the bar layout is
+    /// stable. Stored as raw strings: an unknown one from a newer build is
+    /// dropped on read rather than failing the whole setting.
+    @Published var menuBarFields: Set<MenuBarField> {
+        didSet { defaults.set(menuBarFields.map(\.rawValue), forKey: Self.fieldsKey) }
+    }
+    /// Seconds of sparkline history to request — 60, 300 or 900, bounded by the
+    /// depth of the dish's own ring. Changing it re-polls at once: the series
+    /// arrive with the snapshot, so without this the new window would not appear
+    /// until the next tick, which at a 60 s refresh interval is a long time to
+    /// watch a control that looks broken.
+    @Published var historyWindow: Int {
+        didSet {
+            defaults.set(historyWindow, forKey: "historyWindow")
+            // `restartPolling`, not a bare `Task { await refresh() }`.
+            //
+            // The series arrive with the snapshot, so the new window has to be
+            // fetched at once or the control looks broken until the next tick —
+            // but the plain `refresh()` passes `generation: nil`, which is
+            // exempt from the supersession check by design (it is what the
+            // manual "Refresh now" uses). Two quick window changes could then
+            // publish in completion order rather than request order and leave
+            // the picker on 15m above a 5m snapshot. Restarting the loop bumps
+            // the generation, so a superseded reply is dropped, and it polls
+            // immediately — which is exactly what `refreshInterval` does.
+            if historyWindow != oldValue { restartPolling() }
+        }
+    }
     @Published var pinnedWidget: Bool {
         didSet { defaults.set(pinnedWidget, forKey: "pinned"); pinnedController.setVisible(pinnedWidget) }
     }
@@ -34,7 +62,11 @@ final class AppState: ObservableObject {
     private var applyingLaunchAtLogin = false
 
     private let provider: DishProvider
-    private let defaults = UserDefaults.standard
+    /// Injectable so tests can exercise the settings migration against a
+    /// scratch suite instead of the developer's real preferences — the
+    /// migration only runs on a domain that has the *old* keys and not the new
+    /// one, which is a state `UserDefaults.standard` is in exactly once.
+    private let defaults: UserDefaults
     private var pollTask: Task<Void, Never>?
     private lazy var pinnedController = PinnedPanelController(store: self)
 
@@ -42,7 +74,8 @@ final class AppState: ObservableObject {
     /// back to sample data otherwise so the app still runs.
     let isLive: Bool
 
-    init(provider: DishProvider? = nil) {
+    init(provider: DishProvider? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let provider {
             self.provider = provider
             self.isLive = !(provider is SampleProvider)
@@ -74,8 +107,10 @@ final class AppState: ObservableObject {
             self.isLive = false
             #endif
         }
-        self.iconMode = IconMode(rawValue: defaults.string(forKey: "iconMode") ?? "") ?? .signalBars
-        self.showValueNextToIcon = defaults.object(forKey: "showValue") as? Bool ?? true
+        let bar = Self.loadMenuBar(defaults)
+        self.iconMode = bar.icon
+        self.menuBarFields = bar.fields
+        self.historyWindow = defaults.object(forKey: "historyWindow") as? Int ?? 60
         self.pinnedWidget = defaults.object(forKey: "pinned") as? Bool ?? false
         self.launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? false
         self.refreshInterval = defaults.object(forKey: "refresh") as? Int ?? 1
@@ -86,24 +121,126 @@ final class AppState: ObservableObject {
 
     deinit { pollTask?.cancel() }
 
-    /// The value shown next to the icon and used by the gauge.
-    var headlineValue: String {
-        if data.onBattery { return "\(Int(data.bankPct))%" }
-        switch iconMode {
-        case .dataReadout: return "\(Int(data.pingMs))ms"
-        default:           return "\(data.signalScore)"
+    // MARK: - menu-bar settings
+
+    private static let fieldsKey = "menuBarFields"
+    /// The `IconMode` raw value retired when numbers became `MenuBarField`s.
+    private static let retiredDataReadout = "Data readout"
+
+    /// What a fresh install starts with. Throughput first because that is what
+    /// the bar is for; ping because it is the number that tells you whether the
+    /// link is usable rather than merely up; battery because it costs nothing —
+    /// it renders only once an anchor is set.
+    static let defaultFields: Set<MenuBarField> = [.ping, .down, .up, .battery]
+
+    /// Offered sparkline windows, in seconds. Capped by the depth of the dish's
+    /// `dishGetHistory` ring (900 samples, one per second) — see
+    /// `maxSeriesWindow` in dashboard.go. Offering more would show a 15-minute
+    /// trace under a longer caption.
+    static let historyWindows = [60, 300, 900]
+
+    /// Resolve the stored glyph + fields, migrating pre-field preferences.
+    ///
+    /// The distinction that matters here is upgrade versus fresh install. An
+    /// upgrading user gets exactly what they were already looking at — anything
+    /// else silently redecorates a menu bar they had configured. Only a genuinely
+    /// new install gets `defaultFields`, and "genuinely new" means no icon
+    /// preference was ever written.
+    private static func loadMenuBar(_ defaults: UserDefaults) -> (icon: IconMode, fields: Set<MenuBarField>) {
+        let storedIcon = defaults.string(forKey: "iconMode")
+
+        if let raw = defaults.array(forKey: fieldsKey) as? [String] {
+            let icon = IconMode(rawValue: storedIcon ?? "") ?? .signalBars
+            return (icon, Set(raw.compactMap(MenuBarField.init(rawValue:))))
+        }
+
+        // No field list yet: either a first launch, or a build that predates it.
+        //
+        // "Predates it" is not the same as "has an iconMode". Both legacy keys
+        // were written only by their own `didSet`, so a user who turned *Show
+        // value* off and never touched the glyph picker has `showValue` and no
+        // `iconMode` — a real and unremarkable state, and one that read as a
+        // fresh install here. That silently replaced their bare glyph with the
+        // four-field default: the one outcome this whole function exists to
+        // prevent. An upgrade is any domain carrying *either* legacy key.
+        let legacyShowValue = defaults.object(forKey: "showValue") as? Bool
+        guard storedIcon != nil || legacyShowValue != nil else {
+            // Persisted, not just returned. `init` assigns these properties, and
+            // Swift does not run `didSet` during initialisation, so a fresh
+            // install that only *returned* here wrote nothing — and the first
+            // tap on the glyph picker (`iconMode.didSet`, which writes only
+            // `iconMode`) then produced `{iconMode, no fields, no showValue}`.
+            // On the next launch that is indistinguishable from a pre-fields
+            // upgrade, so the branch below would read the absent `showValue` as
+            // its old default of `true` and quietly collapse the four-field
+            // default to the signal score alone. Writing the resolved pair now
+            // means the upgrade branch is only ever reached by a domain that
+            // genuinely predates fields.
+            let fresh: (IconMode, Set<MenuBarField>) = (.signalBars, defaultFields)
+            persist(fresh, to: defaults)
+            return fresh
+        }
+
+        if storedIcon == retiredDataReadout {
+            // The mode drew "31ms" *instead of* a glyph, so it maps to exactly
+            // that and not to a glyph with a number bolted on.
+            let migrated: (IconMode, Set<MenuBarField>) = (.noGlyph, [.ping])
+            persist(migrated, to: defaults)
+            return migrated
+        }
+        // No stored glyph means the user never moved off the old default.
+        let icon = storedIcon.flatMap(IconMode.init(rawValue:)) ?? .signalBars
+        // `showValue` appended the signal score in every surviving mode; off
+        // meant a bare glyph. Both are representable exactly. Its own default
+        // was on, which is what an absent key means here.
+        let migrated: (IconMode, Set<MenuBarField>) = (icon, (legacyShowValue ?? true) ? [.signal] : [])
+        persist(migrated, to: defaults)
+        return migrated
+    }
+
+    private static func persist(_ v: (icon: IconMode, fields: Set<MenuBarField>), to defaults: UserDefaults) {
+        defaults.set(v.icon.rawValue, forKey: "iconMode")
+        defaults.set(v.fields.map(\.rawValue), forKey: fieldsKey)
+    }
+
+    /// One rendered field. A struct rather than a tuple because `ForEach` needs
+    /// an `Identifiable` element, and Swift has no key paths into tuples.
+    struct MenuBarItem: Identifiable {
+        let field: MenuBarField
+        let text: String
+        var id: MenuBarField { field }
+    }
+
+    /// The fields to draw, in render order, each with its current text. The
+    /// sparkline is not here — it is not text — and a field with nothing to say
+    /// right now (battery off a bank) drops out rather than rendering a zero.
+    var menuBarTexts: [MenuBarItem] {
+        MenuBarField.allCases.compactMap { f in
+            guard menuBarFields.contains(f), let t = f.text(data) else { return nil }
+            return MenuBarItem(field: f, text: t)
         }
     }
 
+    /// Whether the bar should draw the ping sparkline.
+    var showsMenuBarSpark: Bool { menuBarFields.contains(.pingSpark) }
+
+    /// Everything the status item renders as text, joined — one string is all
+    /// the glyph cache needs to compare, and all the tooltip needs to quote.
+    var menuBarText: String { menuBarTexts.map(\.text).joined(separator: " ") }
+
     /// One poll: fetch, apply demo override, keep last-good on failure.
-    /// For the headless render path only: present sample data as if loaded.
-    func seedSample() { data = .sample; hasLoaded = true }
+    /// For the headless render path only: present a snapshot as if it had been
+    /// polled. Takes the data so the harness can pose cases the sample provider
+    /// cannot reach — an idle link, say, which is where the menu bar's
+    /// throughput formatting is worth looking at and where the sample's
+    /// 142.5 Mbps says nothing.
+    func seed(_ d: DishData = .sample) { data = d; hasLoaded = true }
 
     func refresh() async { await refresh(generation: nil) }
 
     private func refresh(generation: Int?) async {
         do {
-            var d = try await provider.poll()
+            var d = try await provider.poll(window: historyWindow)
             // Drop a result from a superseded poll loop rather than letting it
             // overwrite whatever the current one has already published.
             if let generation, generation != pollGeneration { return }

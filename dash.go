@@ -558,7 +558,14 @@ func renderSparklines(w io.Writer, h *dish.History, L ui.Layout) {
 	dnNow, dnMax := lastOf(dn)/1e6, maxf(dn)/1e6
 	upNow, upMax := lastOf(up)/1e6, maxf(up)/1e6
 
-	fmt.Fprintf(w, "\n%s⏱ Last %ds %s%s\n", ui.Hdr, L.SparkW, ui.HR(L.Width-14), ui.Rst)
+	// The span actually plotted, not the span requested. `LastN` used to pad a
+	// young dish's ring out to L.SparkW with unwritten zeros, so the two were
+	// always equal and printing the request was harmless; now that it returns
+	// only written samples, printing the request would caption a 20-second
+	// trace "Last 60s". docs/macos-ui.md requires this surface and the app to
+	// agree, and the app captions from `seriesSeconds` for exactly this reason.
+	covered := shortestSeries(pings, drops, dn, up)
+	fmt.Fprintf(w, "\n%s⏱ Last %ds %s%s\n", ui.Hdr, covered, ui.HR(L.Width-14), ui.Rst)
 	fmt.Fprintf(w, "  %sPing  %s%s%s  %savg %.1f ms · p95 %.1f ms%s\n",
 		ui.Lbl, ui.OK, ui.Spark(pings, 0), ui.Rst, ui.Dim, pingAvg, pingP95, ui.Rst)
 	fmt.Fprintf(w, "  %sDrop  %s%s%s  %sper-second loss · peak %.1f%%%s\n",

@@ -83,7 +83,7 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
     /// than hoping the fields line up, because a silently misread Dashboard is
     /// exactly the fabricated-data failure the Observed decode work exists to
     /// prevent.
-    static let expectedProtocol = 2
+    static let expectedProtocol = 3
 
     // MARK: - wire types
 
@@ -154,8 +154,8 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
 
     // MARK: - DishProvider
 
-    func poll() async throws -> DishData {
-        let resp = try await request(["op": "poll"], retry: true)
+    func poll(window: Int) async throws -> DishData {
+        let resp = try await request(["op": "poll", "window": window], retry: true)
         guard let data = resp.data else { throw HelperError.badResponse("poll returned no data") }
         lastWarning = resp.warning
         return data

@@ -43,6 +43,25 @@ func TestLastN(t *testing.T) {
 			want: []float64{0, 1, 2, 3},
 		},
 		{
+			// The shape a real dish sends shortly after a reboot: the ring is
+			// always full-size (900 slots, measured) and `Current` says how much
+			// of it was ever written. Clamping to the allocation alone returned
+			// the unwritten slots as readings — flat-then-real sparklines, means
+			// diluted toward zero, and a covered-window figure that overstated
+			// the data by the whole unwritten remainder.
+			name: "allocated but partially written",
+			h:    ring(10, 3),
+			n:    10,
+			want: []float64{0, 1, 2},
+		},
+		{
+			// Same shape, asking for less than was written: still the newest.
+			name: "partially written, n below the written count",
+			h:    ring(10, 3),
+			n:    2,
+			want: []float64{1, 2},
+		},
+		{
 			name: "empty ring",
 			h:    &History{Current: 5},
 			n:    3,

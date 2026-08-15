@@ -145,6 +145,28 @@ app:
 	# inside the submission — is exactly what the tag exists to prevent.
 	@if strings -a "$(CONTENTS)/MacOS/dishwatch-helper" | grep -q networkQuality; then \
 	  echo "  ERROR: helper contains networkQuality — rebuild with -tags apphelper" >&2; exit 1; fi
+	# Refuse to ship a helper the app will hang up on.
+	#
+	# HELPER_SRC is a path, not a prerequisite, so this copies whatever was last
+	# written to ../bin — and `HelperProvider.expectedProtocol` is checked
+	# against the banner at runtime and treated as *non-transient*, so a
+	# mismatched pair does not degrade, it backs off and shows nothing. The first
+	# protocol bump after this file was written shipped exactly that: a
+	# day-old helper announcing 2 to an app expecting 3, and a menu bar reading
+	# `0` with the diagnostics going to /dev/null.
+	#
+	# Read the banner from the unsigned source binary — the copy in the bundle
+	# carries `inherit` and dies with SIGTRAP outside a sandboxed parent. The
+	# script bounds the read so this build step's latency does not depend on how
+	# the helper happens to sequence its warm-up dial against its EOF shutdown.
+	@want="$$(grep -o 'expectedProtocol = [0-9]*' Sources/DishWatch/Model/HelperProvider.swift | grep -o '[0-9]*$$')"; \
+	 got="$$(../scripts/helper-protocol.sh "$(HELPER_SRC)")"; \
+	 if [ -z "$$want" ] || [ -z "$$got" ]; then \
+	   echo "  ERROR: could not read the helper protocol (app='$$want' helper='$$got')" >&2; exit 1; \
+	 elif [ "$$want" != "$$got" ]; then \
+	   echo "  ERROR: app expects helper protocol $$want, $(HELPER_SRC) speaks $$got" >&2; \
+	   echo "         → (cd .. && go build -tags apphelper -o bin/dishwatch-helper .)" >&2; exit 1; \
+	 fi
 	# The helper is copied from a separate build tree, so UNIVERSAL=1 says
 	# nothing about it. A universal app around an arm64-only helper is the worst
 	# of both: it launches on an Intel Mac and then the engine dies on every

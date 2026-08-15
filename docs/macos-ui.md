@@ -80,18 +80,66 @@ Three horizons, all fixed, each labelled where it appears:
 | Layer | Window | Role |
 |---|---|---|
 | Metric grid | **now** (latest sample) | the live numbers |
-| Sparklines | **last 60 s** | shape, plus a matching trailing figure |
+| Sparklines | **60 s / 5 m / 15 m**, user-selected | shape, plus a matching trailing figure |
 | Session footer | **observed, this dish boot** | honest long-window quality |
 
-**No window switcher.** A toggle costs space the popover doesn't have, makes
-values incomparable between glances, and would reintroduce exactly the
-mean-throughput reading we're removing.
+### The sparkline window is switchable (reversal, 2026-08-15)
+
+This section previously read *"**No window switcher.** A toggle costs space the
+popover doesn't have, makes values incomparable between glances, and would
+reintroduce exactly the mean-throughput reading we're removing."* That was
+overruled by the user, who asked for ping history explicitly. The three
+objections were real, so here is what each one turned into rather than a claim
+that they didn't apply:
+
+- **Space.** The picker sits on the existing section-heading row, opposite the
+  heading. It costs no vertical space at all.
+- **Incomparable between glances.** Conceded, and answered by making the block
+  self-describing: the heading states the span the *data* covers on every frame,
+  so no glance and no screenshot is ambiguous about which window it is showing.
+- **Reintroducing mean throughput.** It does not. The `↓ Mbps` row still carries
+  no trailing figure at any window — widening the window changes the trace, not
+  what is claimed about it. Only ping and power keep trailings, and both are
+  legitimately means at any horizon.
+
+The ceiling is 900 s because that is the depth of the dish's own
+`dishGetHistory` ring, not a product choice. Offering more would caption data
+that cannot exist.
+
+**The heading names what came back, never what was asked for.** A dish two
+minutes past a reboot answers a 900-sample request with 120 samples; `dashboard.go`
+therefore emits `seriesSeconds`, and every caption reads that. The failure this
+prevents is the same shape as the `max`-as-peak defect at the top of this
+document: a correct number under a caption that overstates it.
+
+Two consequences that are easy to get wrong separately and have to agree:
+
+- `seriesSeconds` is `shortestSeries(ping, down, power)` — the shortest **non-empty**
+  series among the ones the block draws, not `len(pingSeries)`. `LastN` clamps
+  each ring independently, so they are only equal by construction on firmware
+  that ships them equal.
+- **A row whose series is empty is omitted, not drawn blank.** Excluding an empty
+  ring from the figure (so one absent ring cannot hide two good traces) is only
+  honest if the absent row is gone too — otherwise firmware with no `powerIn`
+  gets a blank power row under a heading claiming to cover it.
+
+The same applies to `sl dash`: `renderSparklines` captions from the samples it
+actually plotted, not from `L.SparkW`. Before the ring clamp below, `LastN`
+padded a young dish's window with unwritten zeros so the two were always equal
+and the distinction did not exist.
+
+**`LastN` clamps on written samples, not on the allocated ring.** The dish always
+sends 900 slots and a monotonic-since-boot `current` cursor, so clamping to
+`len(ring)` returned unwritten defaults as readings: a flat trace for the
+unwritten remainder, means diluted toward zero, and a covered-window figure
+overstating the data by exactly that remainder. Invisible on any dish that has
+been up a while, which is every dish anyone tests against.
 
 ## Per-metric decisions
 
 | Metric | Statistic | Window | Where | Label |
 |---|---|---|---|---|
-| Ping | mean, measured seconds only | last 60 s | spark trailing | `avg 31 ms` |
+| Ping | mean, measured seconds only | selected spark window | spark trailing | `avg 31 ms` |
 | Ping | mean, measured seconds only | observed | footer | `ping 29` |
 | Drop | **clean-second share** | observed | footer | `92% clean` |
 | Drop | **outage events** | observed | footer | `11 outages · longest 58s` |
@@ -99,7 +147,7 @@ mean-throughput reading we're removing.
 | Down | **peak** | observed | footer | `peak ↓186` |
 | Up | **peak** | observed | footer | `peak ↑41` |
 | Down / Up | **volume** | observed | footer | `4.2 GB ↓ · 0.6 GB ↑` |
-| Power | mean, zeros excluded | last 60 s | spark trailing | `avg 24.0 W` |
+| Power | mean, zeros excluded | selected spark window | spark trailing | `avg 24.0 W` |
 | Power | mean, zeros excluded | observed | grid sub + footer | `23.8 W session` |
 
 Deliberately absent: any session mean for down or up. The Go DTO does not even
@@ -114,7 +162,14 @@ useless — so the mean is the headline and the worst second is detail.
 
 | Location | String |
 |---|---|
-| Spark section heading | `Last 60 s` |
+| Spark section heading | `Last %@` — the span of the data, from `seriesSeconds` |
+| Spark section heading, no ring yet | `No history yet` — not `Last 0s`, which states a measurement of zero duration |
+| Battery popover draw heading | `Draw · last %@` — same window control, same `seriesSeconds`; both surfaces plot the same series and must describe it identically |
+| A spark row whose series is empty | *(omit the row — see `shortestSeries` below)* |
+| Window picker | `60s` `5m` `15m` — 60 s stays in seconds; `1m` beside `5m` and `15m` reads as a broken scale |
+| Ping spark row label | `Ping ms` |
+| Down spark row label | `↓ Mbps` — never the word "Down", which beside "Ping" reads as *outage* |
+| Power spark row label | `Power W` |
 | Ping spark trailing | `avg %d ms` |
 | Down spark trailing | *(remove — the footer carries the honest peak)* |
 | Power spark trailing | `avg %.1f W` |
@@ -172,7 +227,7 @@ measured — the outage that gets closed when the gap is dropped.
 | File | Change |
 |---|---|
 | `Model/DishData.swift` | **done** — the block decodes as one optional `ObservedStats`, all-or-nothing. Emphatically *not* "resiliently like the rest": per-key fallbacks would render `peak ↓0 · 0 W` from a payload missing one key, under the word that carries the honesty claim. `nil` → hide the row |
-| `Views/ConnectedPopover.swift:89-91` | retitle the spark block `Last 60 s`; drop the Down trailing; keep ping/power trailings |
+| `Views/ConnectedPopover.swift:89-91` | **done** — spark block heading now names the covered span; Down trailing dropped; ping/power trailings kept; row labels carry their units |
 | `Views/ConnectedPopover.swift` | add the session footer row below the sparklines |
 | `Views/CompactWidget.swift:58-59` | replace `avg \(Int(d.downAvg))` / `avg \(Int(d.upAvg))` with `peak` from the session fields |
 | `Views/BatteryPopover.swift:102` | leave `Wh` alone — the runtime estimate depends on accumulated energy; the watts figure belongs elsewhere |
@@ -185,6 +240,7 @@ collected, which is the app's cue to hide the footer.
 
 | Field | Meaning |
 |---|---|
+| `seriesSeconds` | samples the sparkline series actually carry — **not** the window requested; see the reversal note under *Windows* |
 | `obsSeconds` | samples actually integrated this boot |
 | `obsCoverage` | `obsSeconds ÷ uptime`, 0..1 |
 | `sessPingAvg` | ms, seconds with a returned packet only |
@@ -217,6 +273,88 @@ peak that means something.
 it; rejected. `BatteryPopover`'s runtime estimate is derived from accumulated
 Wh, so the energy total earns its place in the battery UI. Session watts go in
 the grid sub-label and footer instead.
+
+## The menu-bar readout
+
+The status item draws a **glyph** and a **readout**. They are independent
+settings, which is the change: "Data readout" used to be an `IconMode`, so the
+only way to get a number into the bar was to give up the glyph, and the only
+number available was ping.
+
+| Setting | Values |
+|---|---|
+| Glyph | Signal bars · Dish arc · Auto (battery on bank, else signal) · No glyph |
+| Readout | any subset of: Ping graph, Ping, Download, Upload, Signal score, Power draw, Battery % |
+
+Rules that are load-bearing rather than cosmetic:
+
+- **Render order is `MenuBarField.allCases`, not tick order.** The bar must not
+  reshuffle itself when a box is toggled, and its width must be predictable from
+  the settings screen.
+- **A field with nothing to say draws nothing.** Battery % off a power bank
+  contributes no text and no separator — not `0%`, which reads as a flat
+  battery rather than as "not on one". This is the same rule as hiding the
+  Observed footer under 120 samples.
+- **Throughput is unit-less, with one decimal below 10 Mbps and whole Mbps
+  above.** The arrow says the direction. The split is not cosmetic: rounding
+  everything to `Int` rendered an idle-but-healthy dish doing 0.3 ↓ / 0.4 ↑ as
+  `↓0 ↑0`, which states that nothing is flowing — the same misreading this
+  document already records for mean throughput. Past 10 Mbps the tenths carry no
+  such meaning and the menu bar is where two glyphs of width is a real cost.
+  Rounding happens before the format is chosen, so 9.96 is `10`, never `10.0`.
+- **An empty readout with no glyph falls back to the signal bars.** Otherwise
+  the status item is zero-width — invisible, with nothing left to click to reach
+  Settings and undo it. The only unrecoverable configuration is the one the UI
+  refuses to produce.
+- **The tooltip carries every headline number**, whichever ones the user left
+  out of the bar.
+
+### The ping graph costs a redraw per poll
+
+`MenuBarLabel` caches its rasterised glyph against the handful of inputs it
+actually depends on, because re-rendering a SwiftUI view on the main actor once
+a second was the app's dominant idle cost. A live sparkline reopens that by
+definition: its shape *is* the data. So it is opt-in, labelled *"redraws every
+poll"* in Settings, and its cache key is the last 26 ping samples quantised to
+whole milliseconds — finer than a 12 pt-tall trace can express, and enough to
+keep a flat link from re-rendering at all.
+
+It is drawn with `Canvas` and a bare stroke rather than reusing `Spark`, whose
+gradient fill flattens to a grey haze once the image becomes a template mask.
+
+### Settings preview
+
+The readout is the one setting whose result is invisible while you choose it —
+the panel is covering the menu bar it changes. The preview row therefore renders
+`MenuBarIconContent` itself, with the ink colour swapped for the dark panel, so
+it cannot drift from what the bar actually draws.
+
+### Migration
+
+Pre-field preferences map exactly, and only a genuinely new install (no
+`iconMode` ever written) gets the default set. Anything else silently
+redecorates a menu bar the user had already configured.
+
+| Stored | Becomes |
+|---|---|
+| `iconMode = Data readout` | glyph `No glyph` + readout `[Ping]` |
+| `showValue = true` | readout `[Signal score]`, glyph unchanged |
+| `showValue = false` | readout `[]`, glyph unchanged |
+| *either* legacy key, no `menuBarFields` | migrate as above, then **persist** |
+| neither legacy key | glyph `Signal bars` + readout `[Ping, Download, Upload, Battery %]`, then **persist** |
+
+**"Upgrade" is any domain carrying either legacy key, and every resolution is
+written back.** Both halves are load-bearing, and each was wrong once:
+
+- Keying only on `iconMode` misread a user who turned *Show value* off and never
+  opened the glyph picker — both keys were written solely by their own `didSet`,
+  so `showValue` alone is an ordinary state.
+- Returning the fresh-install default *without persisting it* was worse, because
+  `init` assignments do not fire `didSet` in Swift: nothing was written, and the
+  first tap on the glyph picker then produced `{iconMode, no fields}` — shaped
+  exactly like a pre-fields upgrade. The next launch read the absent `showValue`
+  as its old default of `true` and collapsed the four-field readout to the signal
+  score. Reachable on a new install by tapping the glyph already selected.
 
 ## Precedent for the CLI
 

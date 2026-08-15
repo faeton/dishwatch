@@ -16,11 +16,11 @@ final class QualityTests: XCTestCase {
     /// A provider that returns whatever it is given, once.
     private struct Fixed: DishProvider {
         let value: DishData
-        func poll() async throws -> DishData { value }
+        func poll(window: Int) async throws -> DishData { value }
     }
     private struct Failing: DishProvider {
         struct Boom: Error {}
-        func poll() async throws -> DishData { throw Boom() }
+        func poll(window: Int) async throws -> DishData { throw Boom() }
     }
 
     func testWeakIsLive() async {

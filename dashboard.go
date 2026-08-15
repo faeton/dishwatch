@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +63,13 @@ type Dashboard struct {
 	UpAvg             float64   `json:"upAvg"`
 	PowerSeries       []float64 `json:"powerSeries"`
 	PowerAvg          float64   `json:"powerAvg"`
+	// SeriesSeconds is how many samples the series above actually carry — which
+	// is not always the window that was asked for. The dish's ring is one sample
+	// per second but only as deep as the dish has been up, so a request for 15
+	// minutes two minutes after a reboot returns 120 points. The caller labels
+	// from this, never from its own request, or a freshly-booted dish gets a
+	// two-minute trace captioned "15 m".
+	SeriesSeconds int `json:"seriesSeconds"`
 	// Observed-session aggregates from stats.json. Unlike the fields above
 	// (which are 60-second window figures off the dish's ring buffer) these
 	// cover every sample seen during the current dish boot. Note the deliberate
@@ -102,7 +111,29 @@ type Dashboard struct {
 // runJSON implements `dishwatch json`: emit one Dashboard snapshot as JSON. On
 // an unreachable dish it emits a minimal Offline dashboard from the last
 // persisted snapshot so the app can show a stale state instead of erroring.
-func runJSON(ctx context.Context) error {
+//
+// `--window <seconds>` widens the sparkline series off the dish's own ring,
+// 60–900. It exists mainly for the development `LiveProvider`, which reaches
+// the engine through this command rather than through the helper protocol; the
+// shipped app asks the helper directly.
+func runJSON(ctx context.Context, args []string) error {
+	window := defaultSeriesWindow
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--window", "-w":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--window needs a value in seconds")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--window: %w", err)
+			}
+			window = n
+			i++
+		default:
+			return fmt.Errorf("json: unknown argument %q", args[i])
+		}
+	}
 	addr := envOr("STARLINK_DISH", "192.168.100.1:9200")
 	c, err := dialDish(ctx)
 	if err != nil {
@@ -116,7 +147,7 @@ func runJSON(ctx context.Context) error {
 		_ = state.MarkUnreachable(addr)
 		return emit(offlineDashboard(addr))
 	}
-	return emit(buildDashboard(s, h, addr))
+	return emit(buildDashboard(s, h, addr, window))
 }
 
 func emit(d Dashboard) error {
@@ -145,7 +176,46 @@ func offlineDashboard(addr string) Dashboard {
 // discarded. Go does not warn on unused parameters and vet does not catch it.
 // Adding coordinates back here would also reopen the privacy-label question the
 // roadmap describes, since nothing in this DTO leaves the machine today.
-func buildDashboard(s *dish.Status, h *dish.History, addr string) Dashboard {
+// Series window bounds, in samples (the dish records one per second).
+//
+// The floor is the window every surface used before this was configurable, and
+// the ceiling is the depth of the dish's own `dishGetHistory` ring — asking for
+// more is not an error (LastN clamps), it just cannot return more, so naming
+// the limit here keeps the app from offering a window the data can never fill.
+const (
+	defaultSeriesWindow = 60
+	maxSeriesWindow     = 900
+)
+
+func clampSeriesWindow(w int) int {
+	if w <= 0 {
+		return defaultSeriesWindow
+	}
+	if w < defaultSeriesWindow {
+		return defaultSeriesWindow
+	}
+	if w > maxSeriesWindow {
+		return maxSeriesWindow
+	}
+	return w
+}
+
+// shortestSeries returns the length of the shortest non-empty series, or 0 if
+// they are all empty. It is the span every one of them can honestly claim.
+func shortestSeries(series ...[]float64) int {
+	n := 0
+	for _, s := range series {
+		if len(s) == 0 {
+			continue // an absent ring draws no row; it must not silence the rest
+		}
+		if n == 0 || len(s) < n {
+			n = len(s)
+		}
+	}
+	return n
+}
+
+func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Dashboard {
 	d := Dashboard{
 		SchemaVersion: DashboardSchemaVersion,
 		State:         swiftState(derivedState(s)),
@@ -171,11 +241,20 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string) Dashboard {
 	}
 
 	if h != nil {
-		const w = 60
+		w := clampSeriesWindow(window)
 		d.PingSeries = h.LastN(h.PopPingLatencyMs, w)
 		d.DownSeries = toMbps(h.LastN(h.DownlinkThroughputBps, w))
 		d.UpSeries = toMbps(h.LastN(h.UplinkThroughputBps, w))
 		d.PowerSeries = h.LastN(h.PowerIn, w)
+		// What came back, not what was asked for — see SeriesSeconds. Taken
+		// across every series the popover captions with it, not just ping:
+		// `LastN` clamps each ring independently, so firmware that ships a
+		// shorter `powerIn` than `popPingLatencyMs` would otherwise get a power
+		// trace captioned with the ping window. Empty rings are skipped rather
+		// than collapsing the figure to zero — an absent ring draws no row, and
+		// hiding the other two with it would be a worse answer than a slightly
+		// conservative one.
+		d.SeriesSeconds = shortestSeries(d.PingSeries, d.DownSeries, d.PowerSeries)
 		d.PingAvg = round1(nonzeroMean(d.PingSeries))
 		d.DownAvg = round1(mean(d.DownSeries))
 		d.DownMax = round1(maxf(d.DownSeries))

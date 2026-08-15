@@ -115,19 +115,19 @@ to see them properly.)
 |------|---------------|
 | `DishWatchApp.swift` | `@main`, `MenuBarExtra` (window style), accessory `AppDelegate` |
 | `Theme.swift` | design tokens — cyan/amber/green/red, panel gradient, score→color |
-| `Model/DishData.swift` | snapshot DTO (mirrors the Go `model.Dashboard`) + `IconMode` |
+| `Model/DishData.swift` | snapshot DTO (mirrors the Go `model.Dashboard`) + `IconMode` + `MenuBarField` |
 | `Model/DishProvider.swift` | `DishProvider` protocol + `SampleProvider` (mockup numbers) |
 | `Model/HelperProvider.swift` | supervises the embedded helper; JSON-line protocol + framing |
 | `Model/LiveProvider.swift` | legacy spawn-per-poll bridge, unbundled dev only |
 | `Model/AppState.swift` | `@MainActor ObservableObject`: poll timer + persisted settings |
 | `Views/Components.swift` | `Spark`, `SignalGauge`, `SignalBars`, `BatteryGlyph`, `DishArcGlyph`, buttons |
-| `Views/MenuBarIcon.swift` | the status-item glyph (resolves `IconMode`, `.auto`) |
+| `Views/MenuBarIcon.swift` | the status-item glyph + readout (`IconMode`, `MenuBarField`, `MenuBarSpark`) |
 | `Views/PopoverView.swift` | routes mains vs battery |
 | `Views/ConnectedPopover.swift` | **A** — connected, on mains |
 | `Views/BatteryPopover.swift` | **B** — power-bank hero |
 | `Views/CompactWidget.swift` | **C** — always-on-top pinned widget |
 | `Views/BatterySetupSheet.swift` | battery setup → maps to `sl pb <pct> <wh>` |
-| `Views/SettingsView.swift` | icon picker + behaviour toggles |
+| `Views/SettingsView.swift` | glyph picker, readout checkboxes, behaviour toggles (`SettingsContent` is split out so the render harness can snapshot inside the ScrollView) |
 | `Render.swift` | headless PNG snapshot mode + the 1024 app-icon source |
 | `NetProbe.swift` | Phase 2 spike — bundle health + dish reachability via two stacks |
 | `Resources/` | `Info.plist`, entitlements (sandboxed + the unsandboxed control), `AppIcon.icns` |

@@ -40,7 +40,9 @@ struct MenuBarLabel: View {
             let age = store.lastGoodAgoText.map { " (\($0))" } ?? ""
             return "DishWatch — not responding. Last reading\(age): \(Int(d.pingMs)) ms · sig \(d.signalScore)"
         case .live:
-            return "\(d.stateLabel) · \(Int(d.pingMs)) ms · \(Int(d.downMbps))↓ Mbps · sig \(d.signalScore)"
+            // Carries every headline number regardless of which ones the user
+            // put in the bar — the tooltip is where the ones they left out live.
+            return "\(d.stateLabel) · \(Int(d.pingMs)) ms · \(Int(d.downMbps))↓ \(Int(d.upMbps))↑ Mbps · sig \(d.signalScore)"
         }
     }
 
@@ -49,14 +51,31 @@ struct MenuBarLabel: View {
     /// re-rasterized a SwiftUI view on the main actor on *every* poll —
     /// once a second, forever, whether or not anything visible had moved. That
     /// was the app's dominant idle cost.
+    /// **Every field here must be something the renderer actually consumes.**
+    ///
+    /// A key that is coarser than the drawing freezes the icon: the glyph
+    /// changes, the key does not, and the stale image is served forever. That is
+    /// not hypothetical — this key first shipped with `signalScore / 5` and
+    /// rounded spark samples while the views drew the raw `Double`s, so a score
+    /// moving 12 → 13 (which lights a bar) and a trace inverting within one
+    /// millisecond (which flips the whole slope, since the spark auto-ranges)
+    /// were both invisible to it. The fix is not a finer bucket, it is keying on
+    /// the drawn quantity and having the view draw from the same value.
     private struct GlyphKey: Equatable {
         let mode: IconMode
-        let showValue: Bool
         let onBattery: Bool
+        /// Whole percent — and `MenuBarIconContent` fills the battery from this
+        /// same rounded value, so key and drawing cannot disagree.
         let bankPct: Int
-        let headline: String
-        let signalBucket: Int
+        /// Every appended value, already laid out. One string covers the whole
+        /// readout no matter how many fields are on.
+        let text: String
+        /// Lit bars, not the score: that is all `SignalBars` derives from it.
+        let litBars: Int
         let scale: CGFloat
+        /// Nil unless the ping sparkline is on. When it is, the shape is part of
+        /// the image, so this is the exact array `MenuBarSpark` will plot.
+        let spark: [Double]?
     }
 
     @MainActor private static var cacheKey: GlyphKey?
@@ -67,13 +86,12 @@ struct MenuBarLabel: View {
         let d = store.data
         let key = GlyphKey(
             mode: store.iconMode,
-            showValue: store.showValueNextToIcon,
             onBattery: d.onBattery,
-            bankPct: Int(d.bankPct),
-            headline: store.headlineValue,
-            // The arc is drawn in fifths; sub-bucket changes are invisible.
-            signalBucket: d.signalScore / 5,
-            scale: backingScale()
+            bankPct: MenuBarIconContent.bankPercent(d),
+            text: store.menuBarText,
+            litBars: SignalBars.litBars(fraction: Double(d.signalScore) / 100),
+            scale: backingScale(),
+            spark: store.showsMenuBarSpark ? MenuBarSpark.plotted(d.pingSeries) : nil
         )
         if key == cacheKey, let img = cacheImage { return img }
         let img = render(store: store)
@@ -106,18 +124,24 @@ struct MenuBarLabel: View {
 /// keeps shape via the alpha channel (RGB is ignored once `isTemplate = true`).
 struct MenuBarIconContent: View {
     @ObservedObject var store: AppState
-    private let ink = Color.black   // any opaque color; template uses alpha only
+    /// Any opaque colour: `isTemplate` keeps only the alpha channel, so the bar
+    /// tints it itself. Overridable so Settings can preview the real thing on a
+    /// dark panel — black ink on the panel would be an invisible preview, and a
+    /// re-implemented one would drift from what the bar actually draws.
+    var ink: Color = .black
 
     var body: some View {
         let d = store.data
-        let mode = store.iconMode
-        let useBattery = d.onBattery && mode == .auto
+        let useBattery = d.onBattery && store.iconMode == .auto
 
         HStack(spacing: 4) {
-            glyph(mode: mode, useBattery: useBattery, d: d)
-            // Data-readout mode IS the number; don't also append the value.
-            if store.showValueNextToIcon && mode != .dataReadout && !useBattery {
-                Text(store.headlineValue)
+            glyph(useBattery: useBattery, d: d)
+            if store.showsMenuBarSpark {
+                MenuBarSpark(values: d.pingSeries, color: ink)
+            }
+
+            ForEach(store.menuBarTexts) { item in
+                Text(item.text)
                     .font(.system(size: 11, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(ink)
             }
@@ -126,22 +150,92 @@ struct MenuBarIconContent: View {
         .padding(.horizontal, 1)
     }
 
+    /// The glyph, or nothing.
+    ///
+    /// `.noGlyph` with no field to show would leave a status item of literally
+    /// zero width — invisible, and with nothing left to click to reach Settings
+    /// and undo it. So an empty readout falls back to the signal bars: the only
+    /// unrecoverable configuration is the one the UI refuses to produce.
+    /// The battery fill, quantised to whole percent — the same value `GlyphKey`
+    /// stores, so the cache cannot skip a redraw the eye would catch. Lossless
+    /// in practice: the glyph is 20 pt wide, so 1% is 0.2 pt.
+    static func bankPercent(_ d: DishData) -> Int { Int(d.bankPct.rounded()) }
+
     @ViewBuilder
-    private func glyph(mode: IconMode, useBattery: Bool, d: DishData) -> some View {
+    private func glyph(useBattery: Bool, d: DishData) -> some View {
+        let bars = SignalBars(color: ink, height: 12, barWidth: 2.4,
+                              fraction: Double(d.signalScore) / 100)
         if useBattery {
-            BatteryGlyph(fraction: d.bankPct / 100, color: ink, width: 20, height: 11)
+            BatteryGlyph(fraction: Double(Self.bankPercent(d)) / 100,
+                         color: ink, width: 20, height: 11)
         } else {
-            switch mode {
-            case .dataReadout:
-                Text("\(Int(d.pingMs))ms")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(ink)
+            switch store.iconMode {
             case .dishArc:
                 DishArcGlyph(color: ink)
+            case .noGlyph:
+                if store.menuBarTexts.isEmpty && !store.showsMenuBarSpark { bars }
             default: // signalBars, or auto-on-mains
-                SignalBars(color: ink, height: 12, barWidth: 2.4, fraction: Double(d.signalScore) / 100)
+                bars
             }
         }
+    }
+}
+
+/// A ping trace small enough for the menu bar.
+///
+/// Not `Spark`: that one fills under the line with a gradient, which a template
+/// image flattens into a grey haze, and it auto-ranges over however many points
+/// it is handed. This takes a fixed tail and draws a bare stroke, so the shape
+/// survives being reduced to an alpha mask at 11 pt.
+struct MenuBarSpark: View {
+    /// Points drawn. Wider than this and the trace stops being readable in a
+    /// menu bar; narrower and a spike lands between samples.
+    static let samples = 26
+
+    /// The exact array this view plots, given a full ping series.
+    ///
+    /// The single definition of the trace, called by both the view and
+    /// `MenuBarLabel.GlyphKey`. It has to be one function: the key quantised to
+    /// whole milliseconds while the view drew raw `Double`s, and because the
+    /// trace auto-ranges over its own min and max, `[10.1, 10.4]` and
+    /// `[10.4, 10.1]` are opposite full-height slopes that shared a key.
+    ///
+    /// A tail, not the whole series, because the popover's window control can
+    /// widen `pingSeries` to 900 points: 26 pt of menu bar holds about 26 of
+    /// them, and keying on the rest would churn the cache for pixels that do not
+    /// exist.
+    static func plotted(_ series: [Double]) -> [Double] {
+        series.suffix(samples).map { ($0).rounded() }
+    }
+
+    var values: [Double]
+    var color: Color
+    var width: CGFloat = 26
+    var height: CGFloat = 11
+
+    var body: some View {
+        let pts = Self.plotted(values)
+        Canvas { ctx, size in
+            guard pts.count > 1 else { return }
+            let mn = pts.min() ?? 0
+            let mx = pts.max() ?? 1
+            // A flat trace is a real reading, not a divide-by-zero: floor the
+            // range so it draws as a line through the middle instead of pinning
+            // to the top edge.
+            let rng = max(mx - mn, 0.0001)
+            let stepX = size.width / CGFloat(pts.count - 1)
+            let inset: CGFloat = 1
+            var path = Path()
+            for (i, v) in pts.enumerated() {
+                let t = mx - mn < 0.0001 ? 0.5 : (v - mn) / rng
+                let y = size.height - inset - CGFloat(t) * (size.height - 2 * inset)
+                let p = CGPoint(x: CGFloat(i) * stepX, y: y)
+                i == 0 ? path.move(to: p) : path.addLine(to: p)
+            }
+            ctx.stroke(path, with: .color(color),
+                       style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: width, height: height)
     }
 }
 

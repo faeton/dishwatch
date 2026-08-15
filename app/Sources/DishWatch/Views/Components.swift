@@ -142,8 +142,16 @@ struct SignalBars: View {
     var fraction: Double = 0.78
     var bars: Int = 4
 
+    /// How many bars this fraction lights. Exposed because the menu-bar glyph
+    /// cache has to key on what is *drawn*: the bar count is the only thing the
+    /// score affects here, and any key coarser or finer than it is wrong in one
+    /// direction or the other.
+    static func litBars(fraction: Double, bars: Int = 4) -> Int {
+        Int((Double(bars) * fraction).rounded())
+    }
+
     var body: some View {
-        let lit = Int((Double(bars) * fraction).rounded())
+        let lit = Self.litBars(fraction: fraction, bars: bars)
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<bars, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 1)

@@ -22,24 +22,75 @@ enum Render {
             renderCandidates(dir); return true
         }
         guard let dir = ProcessInfo.processInfo.environment["DISHWATCH_RENDER"] else { return false }
+        // The harness drives real `AppState`s, whose settings persist through
+        // `didSet` — so rendering the icon and readout variants below rewrote
+        // the developer's own menu-bar preferences to whatever the last loop
+        // iteration happened to set. Snapshot and put them back.
+        let saved = (
+            icon: UserDefaults.standard.string(forKey: "iconMode"),
+            fields: UserDefaults.standard.array(forKey: "menuBarFields") as? [String]
+        )
+        defer {
+            UserDefaults.standard.set(saved.icon, forKey: "iconMode")
+            UserDefaults.standard.set(saved.fields, forKey: "menuBarFields")
+        }
         let store = AppState(provider: SampleProvider())
-        store.seedSample()
+        store.seed()
+        // Pin the settings that this store's snapshots display, so the shots are
+        // a function of the code rather than of whatever the last run left in
+        // UserDefaults.
+        store.iconMode = .signalBars
+        store.menuBarFields = AppState.defaultFields
         var battery = DishData.sample; battery.onBattery = true; battery.bankAnchored = true
 
         snap(ConnectedPopover(d: store.data, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
         snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
         snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
         snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")
-        snap(SettingsView().environmentObject(store), dir, "settings")
+        // `SettingsContent`, not `SettingsView`: ImageRenderer does not
+        // rasterize a ScrollView's contents, so snapping the whole screen
+        // produced a header over blank space — every control here lives inside
+        // the scroller, so the harness was checking nothing at all.
+        snap(SettingsContent(store: store)
+                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "settings")
 
         // Menu-bar glyphs: render each icon mode as the black-ink silhouette the
         // template image uses, on a light bar, to verify shapes aren't blobs.
         for mode in IconMode.allCases {
-            let s = AppState(provider: SampleProvider()); s.seedSample(); s.iconMode = mode
+            let s = AppState(provider: SampleProvider()); s.seed(); s.iconMode = mode
+            s.menuBarFields = []
             snap(MenuBarIconContent(store: s)
                     .padding(6)
                     .background(Color(white: 0.9)),
                  dir, "icon-\(mode.rawValue.replacingOccurrences(of: " ", with: "-"))")
+        }
+
+        // Readout combinations. The bar is the surface with the least room and
+        // the most ways to be configured, and the sparkline in particular is
+        // drawn with `Canvas` — worth a snapshot to confirm it survives being
+        // flattened into a template image rather than becoming a smudge.
+        // An idle-but-healthy link: the case whole-Mbps rounding rendered as
+        // `↓0 ↑0`, i.e. as a dead link. It is also the *common* case — a dish
+        // nobody is streaming through sits here — so it belongs in the harness
+        // beside the busy one rather than only in a unit test.
+        var idle = DishData.sample
+        idle.downMbps = 0.3
+        idle.upMbps = 0.4
+
+        let readouts: [(String, IconMode, Set<MenuBarField>, DishData)] = [
+            ("default",  .signalBars, AppState.defaultFields, .sample),
+            ("tput",     .signalBars, [.down, .up], .sample),
+            ("spark",    .signalBars, [.pingSpark, .ping], .sample),
+            ("numbers",  .noGlyph,    [.pingSpark, .ping, .down, .up], .sample),
+            ("all",      .dishArc,    Set(MenuBarField.allCases), .sample),
+            ("idle",     .signalBars, [.pingSpark, .ping, .down, .up], idle),
+        ]
+        for (name, mode, fields, data) in readouts {
+            let s = AppState(provider: SampleProvider()); s.seed(data)
+            s.iconMode = mode; s.menuBarFields = fields
+            snap(MenuBarIconContent(store: s).padding(6).background(Color(white: 0.9)),
+                 dir, "bar-\(name)")
         }
         return true
     }

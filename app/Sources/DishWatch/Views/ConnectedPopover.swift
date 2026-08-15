@@ -136,16 +136,75 @@ struct ConnectedPopover: View {
 
     private var sparklines: some View {
         VStack(alignment: .leading, spacing: 11) {
-            SectionLabel(text: "Last 60 s").tracking(0.8)
-            sparkRow("Ping", d.pingSeries, DW.cyan, "avg \(Int(d.pingAvg)) ms")
-            // No trailing figure on Down. It used to read `max <n>`, a
+            HStack {
+                // The window the *data* covers, not the one that was requested.
+                // A dish two minutes past a reboot answers a 15-minute request
+                // with two minutes of ring, and captioning that "15 m" would be
+                // the same class of lie as the `max` figure this block already
+                // lost once.
+                SectionLabel(text: coveredLabel).tracking(0.8)
+                    .help("Covers the last \(Self.span(d.seriesSeconds)) the dish has in its own history ring — which is all of it after a reboot, however wide a window you pick.")
+                Spacer()
+                windowPicker
+            }
+            // Row names are units, not words. "Ping"/"Down"/"Power" put a word
+            // with two meanings in a column about link health: beside "Ping",
+            // "Down" reads as *outage*, and it is download throughput — the same
+            // number as the Download cell above.
+            sparkRow("Ping ms", d.pingSeries, DW.cyan, "avg \(Int(d.pingAvg)) ms")
+            // No trailing figure on ↓. It used to read `max <n>`, a
             // 60-second maximum presented as a peak — the defect docs/macos-ui.md
             // opens with. The sparkline already shows the shape, and the
             // Observed footer below carries a peak that means something.
-            sparkRow("Down", d.downSeries, DW.down, nil)
-            sparkRow("Power", d.powerSeries, DW.amber, "avg \(String(format: "%.1f", d.powerAvg)) W")
+            sparkRow("↓ Mbps", d.downSeries, DW.down, nil)
+            sparkRow("Power W", d.powerSeries, DW.amber, "avg \(String(format: "%.1f", d.powerAvg)) W")
+            // Rows for series the dish did not send are omitted, not drawn
+            // blank. This is the other half of `shortestSeries` in dashboard.go,
+            // which excludes an empty ring from the covered-window figure so one
+            // missing ring cannot hide two good traces. That exclusion is only
+            // honest if the absent row is *also* gone — otherwise firmware with
+            // no `powerIn` gets a blank power row under a heading claiming to
+            // cover it.
         }
         .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 6)
+    }
+
+    /// An unreachable dish returns no ring at all, and "Last 0 s" over three
+    /// empty traces states a measurement of zero duration. Name the absence.
+    private var coveredLabel: String {
+        d.seriesSeconds > 0 ? "Last \(Self.span(d.seriesSeconds))" : "No history yet"
+    }
+
+    /// A sparkline span. Distinct from `dur`, which the CLI shares and which
+    /// rolls 60 s up into "1m" — right for an uptime figure, wrong on a button
+    /// beside "5m" and "15m", where the shortest window has always been called
+    /// 60 s and rounding it up makes three buttons read like a nonsense scale.
+    static func span(_ seconds: Int) -> String {
+        seconds < 120 ? "\(seconds)s" : dur(Int64(seconds))
+    }
+
+    /// 60 s / 5 m / 15 m over the dish's own history ring. The ceiling is that
+    /// ring's depth — 900 samples at one per second — not a product decision, so
+    /// there is no point offering a longer one.
+    private var windowPicker: some View {
+        HStack(spacing: 3) {
+            ForEach(AppState.historyWindows, id: \.self) { secs in
+                let on = store.historyWindow == secs
+                Button {
+                    store.historyWindow = secs
+                } label: {
+                    Text(Self.span(secs))
+                        .font(.system(size: 10.5, weight: on ? .semibold : .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(on ? Color(hex: 0x04121B) : DW.textA(0.55))
+                        .padding(.horizontal, 7).padding(.vertical, 2.5)
+                        .background(on ? DW.cyan : Color.white.opacity(0.06),
+                                    in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show the last \(Self.span(secs))")
+            }
+        }
     }
 
     /// The Observed block — long-window link quality for the current dish boot.
@@ -202,9 +261,18 @@ struct ConnectedPopover: View {
         return i <= 1 ? "\(Int(v)) \(units[i])" : String(format: "%.1f %@", v, units[i])
     }
 
+    @ViewBuilder
     private func sparkRow(_ name: String, _ series: [Double], _ color: Color, _ trailing: String?) -> some View {
+        // A single point cannot be a trace, and `Spark` draws nothing for one —
+        // so anything under two samples is a row with a label and no content.
+        if series.count > 1 {
+            sparkRowBody(name, series, color, trailing)
+        }
+    }
+
+    private func sparkRowBody(_ name: String, _ series: [Double], _ color: Color, _ trailing: String?) -> some View {
         HStack(spacing: 12) {
-            Text(name).font(.system(size: 11)).foregroundStyle(DW.textA(0.55)).frame(width: 42, alignment: .leading)
+            Text(name).font(.system(size: 11)).foregroundStyle(DW.textA(0.55)).frame(width: 52, alignment: .leading)
             Spark(values: series, color: color).frame(height: 24)
             // Keeps the fixed width even when there is no trailing figure, so
             // dropping one row's label does not shift the sparklines above it.
