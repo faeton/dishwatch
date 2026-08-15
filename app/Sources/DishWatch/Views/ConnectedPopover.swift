@@ -144,11 +144,17 @@ struct ConnectedPopover: View {
     /// numbers over subtly different windows. No amount of tooltip fixes that;
     /// the second number was the problem.
     ///
-    /// The peak is a fact nothing else on screen shows. `energyLine` remains as
-    /// the cold-start fallback, before there is an Observed block to carry it.
+    /// The peak is a fact nothing else on screen shows. Without an Observed
+    /// block there is no peak to show, so the cell falls back to a *short* energy
+    /// string — short because this fallback is not the cold start it was assumed
+    /// to be. Stats can be unready while `state.json` still holds a long energy
+    /// epoch: a `StatsVersion` bump, a missing or corrupt `stats.json`, a helper
+    /// that bootstraps stats late. Returning the full three-case `energyLine`
+    /// here would let `115.1 Wh over 3h 44m · 30....` back onto the screen for as
+    /// long as that lasts, which is the truncation v0.2.4 removed.
     private var powerSub: String {
         if let o = d.observed { return "peak \(String(format: "%.1f", o.powerPeak)) W" }
-        return energyLine
+        return "\(Self.wh(d.energyWhSinceBoot)) measured"
     }
 
     /// The energy total, said only as strongly as the samples allow.
@@ -175,6 +181,7 @@ struct ConnectedPopover: View {
 
     /// Test seam for `energyLine`, which is private and not a `View`.
     var energyLineForTesting: String { energyLine }
+    var powerSubForTesting: String { powerSub }
     func energyHelpForTesting(_ o: ObservedStats) -> String { energyHelp(o) }
 
     private var sparklines: some View {
@@ -296,9 +303,16 @@ struct ConnectedPopover: View {
                     // but twice now that has not been the connection a reader
                     // makes, and one short phrase is a cheap way to stop
                     // needing them to.
-                    (Text(Image(systemName: "bolt.fill"))
-                     + Text(" \(Self.wh(o.energyWh)) in \(Self.dur(o.seconds))"))
-                        .help(energyHelp(o))
+                    // Omitted when nothing was measurable. `accumulate` skips
+                    // samples reporting no power, so hardware without a sensor
+                    // reaches here with a zero sum — and `0.0 Wh in 2h 14m` is a
+                    // measurement of zero, not the absence of one. The CLI
+                    // already hides its Power line on `PowerCount == 0`.
+                    if o.energyWh > 0 {
+                        (Text(Image(systemName: "bolt.fill"))
+                         + Text(" \(Self.wh(o.energyWh)) in \(Self.dur(o.seconds))"))
+                            .help(energyHelp(o))
+                    }
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 11)).monospacedDigit()
@@ -326,7 +340,6 @@ struct ConnectedPopover: View {
         return """
         \(Self.wh(o.energyWh)) drawn over the \(Self.dur(o.seconds)) this block covers \
         — about \(String(format: "%.1f", mean)) W on average.
-        The figure under Power is the separate since-boot total.
         """
     }
 

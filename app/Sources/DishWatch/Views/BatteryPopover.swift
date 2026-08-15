@@ -65,8 +65,20 @@ struct BatteryPopover: View {
                     }, alignment: .leading)
                 .padding(.top, 16)
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text("dies in").font(.system(size: 12)).foregroundStyle(DW.textA(0.5))
-                timeToEmpty
+                // Zero seconds is the "no honest average" sentinel from
+                // `dashboard.go`, not a bank about to die. Rendered as a
+                // duration it read "dies in 0h 0m" — the same confident wrong
+                // number this whole series has been removing, on the one
+                // readout the power-bank feature exists for.
+                if d.bankSecondsLeft > 0 {
+                    Text("dies in").font(.system(size: 12)).foregroundStyle(DW.textA(0.5))
+                    timeToEmpty
+                } else {
+                    Text("runtime unknown").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(DW.textA(0.6))
+                    Text("no measured draw").font(.system(size: 12))
+                        .foregroundStyle(DW.textA(0.45))
+                }
             }
             .padding(.top, 18)
         }

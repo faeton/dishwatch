@@ -101,8 +101,12 @@ struct DishData: Decodable, Sendable, Equatable {
 
     var stateLabel: String { state.rawValue }
 
-    /// Compact "Xh Ym" / "Ym" string for time-to-empty.
+    /// Compact "Xh Ym" / "Ym" string for time-to-empty, or "—" when there is
+    /// none. Zero is the sentinel `dashboard.go` writes when no honest average
+    /// exists to divide by; printing it as "0m" states an imminent death that
+    /// nothing measured.
     var bankTimeLeftText: String {
+        guard bankSecondsLeft > 0 else { return "—" }
         let h = bankSecondsLeft / 3600
         let m = (bankSecondsLeft % 3600) / 60
         return h > 0 ? "\(h)h \(m)m" : "\(m)m"
@@ -414,7 +418,7 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
         case .up:        return "Upload"
         case .signal:    return "Signal score"
         case .power:     return "Power draw"
-        case .energy:    return "Energy used"
+        case .energy:    return "Energy measured"
         case .battery:   return "Battery %"
         }
     }
@@ -424,7 +428,7 @@ enum MenuBarField: String, CaseIterable, Identifiable, Codable {
     var note: String? {
         switch self {
         case .pingSpark: return "redraws every poll"
-        case .energy:    return "total measured this boot"
+        case .energy:    return "measured total, no window"
         case .battery:   return "only on a power bank"
         default:         return nil
         }

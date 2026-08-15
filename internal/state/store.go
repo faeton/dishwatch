@@ -52,6 +52,19 @@ const (
 	// Refusing beats repairing. We cannot know which of the two numbers is the
 	// wrong one, so there is nothing to recompute; the caller already has an
 	// honest fallback that quotes the total and no average.
+	//
+	// It is a weak detector and worth naming as one: a watt ceiling is a physics
+	// guess about a bookkeeping failure. It bounds the *symptom*, and a dish that
+	// can honestly draw more — a High Performance or maritime unit running its
+	// heater for hours — would be quarantined wrongly. That direction is the
+	// tolerable one: a false positive costs the average and degrades to "no
+	// claim", while a miss costs a fabricated extrapolation stated as fact. The
+	// figure is set for the Standard and Mini this project is tested against.
+	//
+	// The ceiling only *detects*. What makes the refusal stick is persisting
+	// ObsSecondsUnknown at the write site — see integrateEnergy. Checking at read
+	// time alone let both halves keep accumulating underneath, so the ratio
+	// decayed back through the bound and the refusal expired after 85 minutes.
 	MaxPlausibleW = 200.0
 )
 

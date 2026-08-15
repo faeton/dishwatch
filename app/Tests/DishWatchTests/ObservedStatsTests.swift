@@ -165,6 +165,15 @@ final class GoldenFixtureTests: XCTestCase {
         // window it requested, so it has to survive the wire.
         XCTAssertEqual(d.seriesSeconds, 60)
 
+        // The fixture is a capture of the incident state, so assert the fields
+        // that describe it. Without these a regression that started publishing
+        // an average from the quarantined pair would keep this test green.
+        XCTAssertFalse(d.energyCoversBoot, "the capture's samples do not cover its boot")
+        XCTAssertEqual(d.energyAvgW, 0, "an inconsistent pair must yield no average")
+        XCTAssertGreaterThan(d.energyWhSinceBoot, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(d.observed).energyWh, 0,
+                             "the session block carries its own energy, from its own samples")
+
         // The whole session block survives a round trip through the real CLI.
         let o = try XCTUnwrap(d.observed, "the CLI emitted a complete sess* block; it must decode")
         XCTAssertGreaterThanOrEqual(o.seconds, ObservedStats.minSeconds)

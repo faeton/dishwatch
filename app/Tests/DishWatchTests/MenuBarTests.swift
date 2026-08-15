@@ -486,6 +486,41 @@ extension EnergyLineTests {
         guard let o else { return XCTFail("sample must carry an observed block") }
         let help = ConnectedPopover(d: .sample, showSettings: .constant(false)).energyHelpForTesting(o)
         XCTAssertTrue(help.contains(ConnectedPopover.dur(o.seconds)), "names the observed window: \(help)")
-        XCTAssertTrue(help.contains("since-boot"), "points at the other Wh on screen: \(help)")
+        XCTAssertFalse(help.contains("since-boot"),
+                       "the Power cell shows session peak since v0.2.4; naming a since-boot total there is stale: \(help)")
+    }
+}
+
+extension EnergyLineTests {
+    /// Zero time-to-empty is the "no honest average" sentinel, not an imminent
+    /// death. Both reviewers flagged it rendering as `dies in 0h 0m`.
+    func testZeroRuntimeIsNotADuration() {
+        var d = DishData.sample
+        d.bankSecondsLeft = 0
+        XCTAssertEqual(d.bankTimeLeftText, "—")
+
+        d.bankSecondsLeft = 2 * 3600 + 18 * 60
+        XCTAssertEqual(d.bankTimeLeftText, "2h 18m")
+        d.bankSecondsLeft = 45 * 60
+        XCTAssertEqual(d.bankTimeLeftText, "45m")
+    }
+
+    /// The Power cell's fallback is not cold-start-only — stats can be unready
+    /// while `state.json` holds a long energy epoch — so it must not be able to
+    /// reintroduce the string that truncated at half a popover width.
+    func testPowerSubFallbackStaysShort() {
+        var d = DishData.sample
+        d.observed = nil
+        d.energyWhSinceBoot = 115.1
+        d.energySeconds = 13_440
+        d.energyAvgW = 30.1
+        let sub = ConnectedPopover(d: d, showSettings: .constant(false)).powerSubForTesting
+        XCTAssertEqual(sub, "115 Wh measured")
+        XCTAssertLessThan(sub.count, 20, "must fit half a popover: \(sub)")
+
+        // With an Observed block it is the session peak, which nothing else shows.
+        d.observed = DishData.sample.observed
+        XCTAssertEqual(ConnectedPopover(d: d, showSettings: .constant(false)).powerSubForTesting,
+                       "peak 48.1 W")
     }
 }

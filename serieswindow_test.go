@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/faeton/dishwatch/internal/state"
+)
 
 // The sparkline window became a request parameter so the app can offer 60 s /
 // 5 m / 15 m over the dish's own history ring. Two things have to hold for that
@@ -147,5 +151,48 @@ func TestNoHistoryLeavesSeriesSecondsZero(t *testing.T) {
 	}
 	if len(d.PingSeries) != 0 {
 		t.Fatalf("got %d ping samples with no history, want none", len(d.PingSeries))
+	}
+}
+
+// The refusal has to be *persisted*, not recomputed.
+//
+// It was a read-time gate only, and both reviewers landed on the same failure:
+// integrateEnergy keeps adding to both halves underneath it, so the implied
+// average decays back through the bound and the refusal expires. Measured on
+// the pair this was written for — 251.95 Wh against 192 s — at a real 30 W it
+// re-crosses 200 W after 85 minutes, and the CLI resumes publishing an
+// extrapolation of 6242 Wh against an actual 936 Wh.
+func TestImpossiblePairIsQuarantinedNotJustRefused(t *testing.T) {
+	fresh(t)
+
+	// A ring the integrator can advance from, and the incident pair as `prev`.
+	h := powerRingWithPings(900, 900, 30)
+	prev := &state.Snapshot{
+		Boots: 1, UptimeS: 107247, EnergyWh: 251.95,
+		ObsSeconds: 192, LastCurrent: 600,
+	}
+	s := statusAt(1, 107247)
+
+	_, _, _, _, obsSec := integrateEnergy(s, h, prev, 1786800000)
+	if obsSec != state.ObsSecondsUnknown {
+		t.Fatalf("obsSeconds = %d, want ObsSecondsUnknown — a refusal that is not written back expires as the ratio decays", obsSec)
+	}
+
+	// And it stays quarantined on the next poll rather than healing.
+	next := &state.Snapshot{
+		Boots: 1, UptimeS: 107547, EnergyWh: 254.45,
+		ObsSeconds: obsSec, LastCurrent: 900,
+	}
+	h2 := powerRingWithPings(900, 1200, 30)
+	_, _, _, _, obsSec2 := integrateEnergy(statusAt(1, 107547), h2, next, 1786800300)
+	if obsSec2 != state.ObsSecondsUnknown {
+		t.Fatalf("obsSeconds = %d after another poll, want it to stay unknown until reboot", obsSec2)
+	}
+
+	// A consistent pair is untouched.
+	ok := &state.Snapshot{Boots: 1, UptimeS: 4000, EnergyWh: 30, ObsSeconds: 3600, LastCurrent: 600}
+	_, _, _, _, obsSec3 := integrateEnergy(statusAt(1, 4000), h, ok, 1786800000)
+	if obsSec3 <= 0 {
+		t.Fatalf("obsSeconds = %d, want a real count for a 30 W pair", obsSec3)
 	}
 }

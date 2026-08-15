@@ -261,6 +261,27 @@ func integrateEnergy(s *dish.Status, h *dish.History, prev *state.Snapshot, now 
 	if obsStartTs == 0 {
 		obsStartTs = now
 	}
+	// Quarantine an epoch whose two halves cannot both be true, and *persist*
+	// that: once marked, the branches above leave it marked until the next
+	// reboot re-bootstraps both together.
+	//
+	// A read-side check alone was not enough, and the way it failed is worth
+	// keeping. `ObservedAvgW` refuses to divide when the implied mean is past
+	// anything a dish can draw — but both halves keep accumulating underneath
+	// it, so the ratio decays back through the bound and the refusal expires.
+	// Measured on the pair this was written for (251.95 Wh against 192 s), at a
+	// real 30 W it re-crosses 200 W after 85 minutes and the CLI resumes
+	// publishing an extrapolation: 6242 Wh against an actual 936 Wh. The gate
+	// delayed the fabrication rather than preventing it.
+	//
+	// Marking is also what makes the fix reach every consumer. `pb.go`'s
+	// unanchored branch extrapolates `EnergyWh * UptimeS / ObsSeconds` without
+	// consulting the average at all — 140 kWh "used" from that same pair, which
+	// empties the bank readout — and it already returns early on a
+	// non-positive `ObsSeconds`. One sentinel, every caller, no new guards.
+	if obsSec > 0 && energyWh > 0 && energyWh*3600/float64(obsSec) > state.MaxPlausibleW {
+		obsSec = state.ObsSecondsUnknown
+	}
 	return
 }
 
@@ -679,10 +700,15 @@ func renderEnergy(w io.Writer, L ui.Layout, pv persisted) {
 
 	switch {
 	case !haveAvg:
-		// A snapshot from before the sample counter existed. We hold a total
-		// but no honest denominator, so quote the total and nothing else
-		// rather than divide by wall clock.
-		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %sover %s%s\n",
+		// No honest denominator: a snapshot predating the sample counter, or a
+		// quarantined pair. Quote the total and claim nothing about the span.
+		//
+		// This said `over <uptime>`, which is the one thing it is not allowed
+		// to say — the branch exists precisely because the interval the total
+		// covers is unknown, and the accumulator only ever integrates samples
+		// it retrieved, so it is a floor rather than a boot figure. The app's
+		// wording for this case is "measured"; now they agree.
+		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %smeasured · window unknown, up %s%s\n",
 			ui.Lbl, ui.Rst, ui.Val, snap.EnergyWh, ui.Rst, ui.Dim, upStr, ui.Rst)
 	case snap.ObservedCoversBoot():
 		fmt.Fprintf(w, "  %sEnergy%s %s%.2f Wh%s  %ssince boot (%s) · avg %.1f W%s\n",
