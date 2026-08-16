@@ -13,7 +13,7 @@ SHRINK    := -s -w
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 .PHONY: build release clean cross shrink size deps publish publish-dry helper \
-        helper-universal helper-check contract sl-lock check
+        helper-universal helper-check contract sl-lock check site site-dry
 
 # Dev build — includes debug info, fast compile.
 build:
@@ -103,6 +103,37 @@ publish:
 publish-dry:
 	@command -v goreleaser >/dev/null || { echo "goreleaser not installed — brew install goreleaser" >&2; exit 1; }
 	goreleaser release --snapshot --clean
+
+# Publish site/index.html to the Pages repo.
+#
+# site/index.html is the source of truth; dishwatch.github.io holds a copy and
+# nothing but this target keeps them equal. That copy used to be made by hand,
+# which is how the landing page came to advertise a panel the app had stopped
+# shipping — so if you edit the site, finish with `make site`.
+#
+# Deliberately a command you run, not a push hook: a website going live is a
+# decision, and every merge to main is not.
+SITE_REPO ?= git@github.com:dishwatch/dishwatch.github.io.git
+SITE_WORK ?= $(CURDIR)/dist/site
+
+# Show what would be published, changing nothing remote. The checkout is reset
+# to origin first — it persists across runs, so without this a copy left over
+# from a previous `make site` would diff against a stale base.
+site-dry: $(SITE_WORK)
+	@cd $(SITE_WORK) && git fetch -q origin && git reset -q --hard origin/main
+	@cp site/index.html $(SITE_WORK)/index.html
+	@cd $(SITE_WORK) && if git diff --quiet; then echo "  site already up to date"; \
+	  else git --no-pager diff --stat; fi
+
+site: site-dry
+	@cd $(SITE_WORK) && if git diff --quiet; then exit 0; fi; \
+	  git add index.html && \
+	  git commit -q -m "Sync landing page from dishwatch@$$(cd $(CURDIR) && git rev-parse --short HEAD)" && \
+	  git push -q origin main && echo "  published to https://dishwatch.github.io"
+
+$(SITE_WORK):
+	@mkdir -p $(dir $(SITE_WORK))
+	git clone -q $(SITE_REPO) $(SITE_WORK)
 
 clean:
 	rm -rf bin dist
