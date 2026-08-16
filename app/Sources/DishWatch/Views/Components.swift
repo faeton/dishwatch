@@ -39,7 +39,11 @@ struct AppMenuButton: View {
         .menuIndicator(.hidden)
         .frame(width: 28, height: 28)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
-        .help("Settings & quit")
+        // Names the destructive item too. Tooltips do not reliably fire in this
+        // panel (docs/macos-ui.md), so this is not where anyone learns what the
+        // menu holds — but a label that lists half the commands and omits the
+        // one that drops the connection is wrong in the direction that matters.
+        .help("Settings, refresh, reboot & quit")
     }
 }
 

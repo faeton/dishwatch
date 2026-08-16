@@ -7,36 +7,120 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppState
     /// Returns to the status panel (in-panel navigation, not a window).
     var onClose: () -> Void = {}
+    /// The settings list's own height, measured from the laid-out content.
+    @State private var contentHeight: CGFloat = 0
+    /// The host screen's usable height, sampled **once** when the panel opens.
+    ///
+    /// Not read live, and that distinction is the whole point. `hostScreenHeight`
+    /// asks where the pointer is, which is the right question at open time — the
+    /// panel exists because the user just clicked a status item — and the wrong
+    /// one a second later. `body` re-evaluates on every poll (once a second by
+    /// default) and on every settings toggle, so reading it there let the cap
+    /// track the mouse: open on a 615 pt laptop with a 495 pt cap, move the
+    /// pointer to a 1440 pt external, and the next poll recomputes the cap as
+    /// 920 and asks for a ~960 pt panel on a 615 pt screen. The window server
+    /// clips that, and the ScrollView does not save it because it believes it
+    /// has the room. Both reviewers caught it independently.
+    ///
+    /// Zero until `onAppear`, which `resolvedHeight` treats as "not measured
+    /// yet". `SettingsView` is constructed inside `if showSettings`, so this is
+    /// re-sampled every time settings is opened — including onto a different
+    /// screen.
+    @State private var screenHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView { SettingsContent(store: store) }
-                .frame(maxHeight: Self.maxContentHeight)
+            ScrollView {
+                SettingsContent(store: store)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                    })
+            }
+            .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+            // An explicit height, not `maxHeight`. This is the whole fix, and
+            // the previous two attempts at it were both no-ops.
+            //
+            // A `ScrollView` has no ideal height of its own — it takes whatever
+            // its parent proposes, and the panel proposes something far short of
+            // the content. `maxHeight` is only a ceiling, so raising it from 460
+            // to 760 to 920 changed a bound that was never the binding
+            // constraint, and the panel came back the same size every time.
+            //
+            // What made that invisible in review is worth recording: the render
+            // harness *did* show the taller panel, because `Render.snap` wraps
+            // every view in `.fixedSize(vertical: true)`, which forces the ideal
+            // height and makes a ScrollView adopt its content's. So the one
+            // check available here reported success for a change that did
+            // nothing in the app. Measuring the content and stating the height
+            // outright is the version that does not depend on who is proposing
+            // what.
+            .frame(height: resolvedHeight)
         }
         .foregroundStyle(DW.text)
         .environment(\.colorScheme, .dark)
+        .onAppear { screenHeight = Self.hostScreenHeight }
     }
 
-    /// How tall the scroller may grow before it starts scrolling.
+    /// Content height, capped — so it scrolls only when it genuinely cannot fit.
     ///
-    /// There has to be a cap: the panel hangs off the menu bar, and one taller
-    /// than the screen is *clipped* by the window server rather than scrolled —
-    /// the controls at the bottom become unreachable, which is worse than a
-    /// scrollbar. But the cap used to be a flat 460 pt, under half the height of
-    /// an ordinary display, so a list of a dozen controls scrolled on a screen
-    /// with room for all of them twice over.
+    /// Falls back to the cap until the first measurement lands, which is one
+    /// layout pass. Opening slightly tall and settling is the right way round:
+    /// the alternative is a panel that opens short and grows, which reads as the
+    /// list loading.
+    private var resolvedHeight: CGFloat {
+        let cap = Self.contentCap(screenHeight: screenHeight > 0 ? screenHeight
+                                                                 : Self.hostScreenHeight)
+        guard contentHeight > 0 else { return cap }
+        return min(contentHeight, cap)
+    }
+
+    /// Room reserved above the content: this screen's own header, plus a margin
+    /// so the panel does not end flush against the bottom of the display.
+    private static let chrome: CGFloat = 120
+
+    /// The tallest the list may be drawn before it starts scrolling.
     ///
-    /// Derived from the *shortest* attached screen, not `NSScreen.main`: an
-    /// `.accessory` app usually has no key window, so `main` is nil or names the
-    /// wrong display, and the panel opens on whichever bar was clicked. Erring
-    /// short costs a scrollbar; erring tall costs unreachable buttons.
+    /// Split out as a pure function of the screen height because the interesting
+    /// cases are the ones this machine does not have. A floor that reads as
+    /// harmless on a 1084 pt display — "never smaller than 600" — silently wins
+    /// over the screen-derived value on a small one and asks for a 640 pt panel
+    /// on a 615 pt screen, which the window server clips rather than scrolls.
+    /// That is the precise failure the cap exists to prevent, reintroduced by
+    /// the guard meant to stop a regression. `SettingsHeightTests` covers it.
     ///
-    /// Floored at the old 460 so a small or oddly-reported display cannot make
-    /// this a regression.
-    static var maxContentHeight: CGFloat {
-        let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
-        return max(460, min(760, shortest - 140))
+    /// So the floor is now well below any real display: it exists only so a
+    /// nonsensical reading cannot produce a zero-height panel, never to override
+    /// a screen that is genuinely short.
+    ///
+    /// The ceiling is 920 so that an ordinary display does not scroll at all,
+    /// which is what was asked for. It has to clear the settings list's own
+    /// height — `SettingsHeightTests` measures that list rather than quoting a
+    /// number, so adding a row cannot quietly falsify this paragraph.
+    static func contentCap(screenHeight: CGFloat) -> CGFloat {
+        max(240, min(920, screenHeight - chrome))
+    }
+
+    /// The screen the panel is about to open on.
+    ///
+    /// **Call this once, at open.** See `screenHeight` for why reading it during
+    /// `body` is a bug rather than a style preference.
+    ///
+    /// The mouse is the best available answer: the panel appears because the
+    /// user just clicked a status item, so the pointer is on the screen whose
+    /// menu bar they used. `NSScreen.main` is not usable here — an `.accessory`
+    /// app usually has no key window — and the previous "shortest attached
+    /// screen" was safe but wrong in the ordinary mixed-size case, capping a
+    /// large external display to fit a laptop panel nobody was looking at.
+    ///
+    /// The fallback keeps that conservatism for the case where the pointer is
+    /// on no screen at all.
+    private static var hostScreenHeight: CGFloat {
+        let mouse = NSEvent.mouseLocation
+        if let s = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+            return s.visibleFrame.height
+        }
+        return NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
     }
 
     /// Back bar — the only way out of in-panel settings.
@@ -59,6 +143,16 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 11)
         .overlay(Divider().background(DW.hairline), alignment: .bottom)
+    }
+}
+
+/// Carries the settings list's laid-out height up to the view that sizes the
+/// panel. `max` rather than "last one wins" so a stray zero from a view still
+/// being laid out cannot collapse the panel.
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

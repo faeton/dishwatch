@@ -4,11 +4,18 @@ import AppKit
 /// The status-item glyph drawn in the menu bar. Resolves `IconMode` (with
 /// `.auto` picking battery on bank, else signal) and optionally appends a value.
 ///
-/// We render the glyph ourselves to a **template** `NSImage` at the screen's
-/// backing scale rather than letting `MenuBarExtra` rasterize a SwiftUI view —
-/// the latter produced a muddy, half-black blob (esp. the dish arc). A template
-/// image is crisp and tints itself to the menu bar (white on dark, black on
-/// light). Status color lives in the popover, where the bar can't show it.
+/// We render the glyph ourselves to an `NSImage` at the screen's backing scale
+/// rather than letting `MenuBarExtra` rasterize a SwiftUI view — the latter
+/// produced a muddy, half-black blob (esp. the dish arc).
+///
+/// Normally that image is a **template**: it keeps only its alpha, so the bar
+/// tints it itself, white on dark and black on light, in appearances Apple has
+/// not shipped yet. `AppState.colorThroughput` gives that up deliberately — a
+/// coloured item cannot be a template — and takes on inking the readout by hand
+/// per appearance. See `render(store:darkBar:)` and `DW.downBar(dark:)`.
+///
+/// Status colour still lives in the popover either way; the bar shows at most
+/// the two throughput hues.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppState
     /// Which bar we are drawing on, and the reason this is read from the

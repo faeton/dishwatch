@@ -59,6 +59,11 @@ final class ServiceReadingTests: XCTestCase {
     /// No label anywhere may name a product. "Roam", "Residential" and the rest
     /// are SKUs; the dish reports a service *class* and is never told which
     /// plan bought it.
+    /// Sweeps everything that reaches the screen, not only the enum labels.
+    ///
+    /// Checking the labels alone would let a later edit put "Roam" into the
+    /// composition in `serviceLine` or into the billing caveat and still pass,
+    /// under a test whose name promises "no label anywhere".
     func testNoLabelNamesASKU() {
         let sku = ["roam", "residential", "priority", "standard", "unlimited", "mobile priority"]
         var text = [String]()
@@ -68,6 +73,13 @@ final class ServiceReadingTests: XCTestCase {
         for m in [ServiceMobility.fixed, .nomadic, .mobile, .unknown] {
             text.append(m.label)
             text.append(m.explanation)
+            // The composed strings too — every combination, since the line and
+            // the caveat are assembled rather than looked up.
+            for c in [ServiceClass.consumer, .business, .businessPlus, .aviation, .unknown] {
+                let d = data(c, m)
+                text.append(d.serviceLine ?? "")
+                text.append(d.serviceExplanation ?? "")
+            }
         }
         for t in text.map({ $0.lowercased() }) where !t.isEmpty {
             for name in sku {

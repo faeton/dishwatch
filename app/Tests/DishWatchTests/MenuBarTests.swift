@@ -491,6 +491,20 @@ final class MenuBarTests: XCTestCase {
                        "a template readout is appearance-independent; redrawing it is wasted work")
     }
 
+    /// The setting has to survive a relaunch, which is the one thing none of
+    /// the rendering tests touch: a mismatched defaults key between `init` and
+    /// the `didSet` leaves the toggle working perfectly all session and reset
+    /// the next morning, with every other test still green.
+    func testTheColourSettingSurvivesARelaunch() {
+        let defaults = scratchDefaults()
+        let first = AppState(provider: Fixed(value: .sample), defaults: defaults)
+        XCTAssertFalse(first.colorThroughput, "a fresh install must not opt into a non-template bar")
+        first.colorThroughput = true
+
+        let relaunched = AppState(provider: Fixed(value: .sample), defaults: defaults)
+        XCTAssertTrue(relaunched.colorThroughput, "the colour setting did not persist")
+    }
+
     /// Only the throughput pair takes a hue. Colouring everything would
     /// distinguish nothing, and each extra colour is one more that has to stay
     /// legible on both bars.

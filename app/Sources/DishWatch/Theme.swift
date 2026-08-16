@@ -44,15 +44,52 @@ enum DW {
     static let up    = Color(hex: 0x9B90D9)
     /// Menu-bar variants of the two throughput hues.
     ///
-    /// The panel colours cannot be reused as-is. A coloured status item is not a
-    /// template image, so it no longer tints itself to the bar — it draws
-    /// exactly what we hand it, on whichever bar the user happens to run. `up`
-    /// is a pale violet picked to sit *quietly* on a near-black panel (see the
-    /// note above it), and on a white menu bar it is close to unreadable. Each hue
-    /// therefore has a darkened twin: same hue, enough luminance contrast to
-    /// read at 11 pt semibold against white.
-    static func downBar(dark: Bool) -> Color { dark ? down : Color(hex: 0x1B5FCC) }
-    static func upBar(dark: Bool) -> Color { dark ? up : Color(hex: 0x5B4FA8) }
+    /// Neither panel colour survives the move, and the first attempt reused
+    /// `down`/`up` for exactly the wrong reason — they look correct in
+    /// isolation, and they are never in isolation. The figure standing beside
+    /// them is the bar's own ink. The panel hues were tuned *for a panel*, `up`
+    /// deliberately quietened so it would not shout beside cyan and amber on a
+    /// muted surface; the menu bar is the opposite problem, 11 pt next to white
+    /// over a photograph.
+    ///
+    /// Both branches are pushed further from mid-tone than legibility against a
+    /// flat bar would need, because the menu bar is frequently neither black nor
+    /// white: it is translucent, and a vivid desktop picture shows through it.
+    ///
+    /// Contrast ratios, all WCAG, against a named background — a bare ratio with
+    /// no background is not a measurement:
+    ///
+    /// | ink | vs `#1C1C1E` dark bar | vs `#2E6FC0` blue wallpaper |
+    /// |---|---|---|
+    /// | system white | 17.0 | 5.1 |
+    /// | `down` `#4B8DF8` (panel hue, first attempt) | 5.2 | 2.3 |
+    /// | `downBar(dark:)` `#A9D6FF` | 13.0 | 3.3 |
+    ///
+    /// The first attempt reused the panel hues and shipped at roughly a third of
+    /// the contrast of the white figure standing next to them — "almost not
+    /// seen". Hue cannot rescue a blue number on a blue bar, so the fix is on
+    /// the luminance axis, which still works when the background may be any
+    /// colour: near-white on the dark branch, near-black on the light one, each
+    /// keeping only enough chroma to say which direction it is.
+    ///
+    /// The light branch is therefore *dark* ink — the mirror of the branch above
+    /// it, not more of the same. Reading this table as "these are pale tints"
+    /// and correcting the code to match would put pastels on a white bar.
+    ///
+    /// **The `dark` flag is the weak link, and it is honest to say so here.**
+    /// It comes from `@Environment(\.colorScheme)`, which tracks the app and
+    /// system appearance rather than the bar. Those usually agree and can
+    /// disagree — a light system with a dark wallpaper behind the bar, or the
+    /// reverse. A template image never had to care; these two palettes are
+    /// opposites, so a wrong flag is not "faded" but "invisible". That is the
+    /// standing cost of the setting, which is why it is opt-in and why the
+    /// toggle says the bar stops matching light and dark by itself.
+    static func downBar(dark: Bool) -> Color {
+        dark ? Color(hex: 0xA9D6FF) : Color(hex: 0x0B47B8)
+    }
+    static func upBar(dark: Bool) -> Color {
+        dark ? Color(hex: 0xDCD2FF) : Color(hex: 0x4A3A96)
+    }
 
     static let amber = Color(hex: 0xFFB340) // power / battery
     static let amberA = Color(hex: 0xFF9F0A)
