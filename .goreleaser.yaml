@@ -57,6 +57,29 @@ changelog:
       - "^chore:"
       - "Merge pull request"
 
+# Deprecated since goreleaser v2.10, and kept deliberately.
+#
+# `goreleaser check` exits non-zero over this and will keep doing so. That is
+# accepted, not overlooked — `make check` does not run it, so CI is unaffected,
+# and a `release` still generates the formula in 2.17.1 (verified by dry run:
+# the deprecation is a warning at the defaults stage, nothing more).
+#
+# The recommended migration is `brews` → `homebrew_casks`, and it cannot be
+# taken yet, because **casks are macOS-only**: Homebrew answers a cask install
+# on Linux with "Error: Installing casks is supported only on macOS"
+# (https://github.com/orgs/Homebrew/discussions/3999). README.md advertises
+# "The CLI — macOS and Linux, arm64 and x86_64 — brew install
+# faeton/tap/dishwatch", and the generated formula does carry `on_linux` URLs,
+# so renaming the key would quietly withdraw a documented platform.
+#
+# Goreleaser's own justification is the part that does not apply here: "This
+# was the only way to do it for Linuxbrew at the time, but this is no longer
+# true" (https://goreleaser.com/blog/goreleaser-v2.10/). It is still true for
+# this project.
+#
+# Migrate when Linux brew support is deliberately dropped, not before — and
+# when that day comes it needs a `tap_migrations.json` in the tap so existing
+# formula installs move to the cask rather than silently going stale.
 brews:
   - name: dishwatch
     repository:

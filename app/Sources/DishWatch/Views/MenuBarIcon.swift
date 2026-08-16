@@ -221,7 +221,14 @@ struct MenuBarIconContent: View {
             }
         }
         .frame(height: 15)
-        .padding(.horizontal, 1)
+        // 1 pt normally; 2 more when tinted, because a SwiftUI shadow draws
+        // *outside* the layout box and `ImageRenderer` sizes the bitmap to the
+        // reported size. Without the extra margin the halo added below is
+        // rendered straight off the edge and clipped — and the Settings preview
+        // would not show it, since that is live SwiftUI rather than a
+        // rasterised image, so the bar and the preview would disagree.
+        .padding(.horizontal, tinted ? 3 : 1)
+        .padding(.vertical, tinted ? 2 : 0)
         // A hairline shadow, only in coloured mode, and only because coloured
         // mode gave up the thing that made it unnecessary.
         //

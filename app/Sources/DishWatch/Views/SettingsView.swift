@@ -43,22 +43,29 @@ struct SettingsView: View {
             // the correction belongs here rather than in a commit message
             // nobody will reread.
             //
-            // Measured with a standalone `NSHostingView`: the same tree reports
-            // 956 pt under `.frame(height:)` and 956 pt under
-            // `.frame(maxHeight:)`. A `ScrollView` does adopt its content's
-            // height beneath a ceiling, so raising 460 → 760 → 920 was a real
-            // change every time, and a test written to catch the difference
-            // passed under its own mutation because there is no difference to
-            // catch.
+            // Measured with a standalone `NSHostingView`, sweeping the cap:
             //
-            // What this spelling buys is only that the height is stated rather
-            // than inferred — one less thing depending on how SwiftUI resolves
-            // an ideal size. It is kept for that, not for a fix it did not make.
+            //     cap 460 → 500 pt    cap 760 → 800 pt    cap 920 → 956 pt
             //
-            // The panel's actual height is still unexplained: raising the cap by
-            // 300 pt did not visibly move it, so something outside this view is
-            // deciding. `SettingsPanelProbe` logs asked-versus-granted on every
-            // open so the next data point is a measurement.
+            // identical under both spellings. So two things are settled. The
+            // ceiling *does* bind — a `ScrollView` adopts its content's height
+            // beneath it — and `.frame(height:)` is not an improvement on
+            // `.frame(maxHeight:)`; a test written to catch a difference passed
+            // under its own mutation because there is none. This spelling is
+            // kept only because a stated height rests on one less inference,
+            // not because it fixed anything.
+            //
+            // What is *not* settled is the panel. The requested size demonstrably
+            // grew by 300 pt and the window on screen did not follow, so the
+            // constraint is the host: settings is swapped into the same
+            // `MenuBarExtra` panel that was first sized to the status popover
+            // (`PopoverView` sets width only), and that window is evidently not
+            // resizing to a later, taller sibling. An ideal size from a detached
+            // hosting view is not a theory of that window — which is the trap
+            // this comment has already fallen into twice.
+            //
+            // `SettingsPanelProbe` logs asked-versus-granted on every open, so
+            // the next move is a measurement of the panel itself.
             //
             // One methodological note worth keeping, since it cost three
             // attempts: `Render.snap` wraps every view in
@@ -71,7 +78,10 @@ struct SettingsView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             screenHeight = Self.hostScreenHeight
-            SettingsPanelProbe.report(asked: resolvedHeight, screen: screenHeight)
+            // `asked` is read inside the probe's own delayed block, not here:
+            // at `onAppear` the preference has not landed, so `resolvedHeight`
+            // is still the cap rather than the height actually settled on.
+            SettingsPanelProbe.report(screen: screenHeight) { resolvedHeight }
         }
     }
 
@@ -159,8 +169,13 @@ struct SettingsView: View {
     }
 }
 
-/// Logs what the settings panel *asked* for against what the window server
-/// actually granted it.
+/// Logs the height the settings list asked for against the height the panel
+/// window was actually given.
+///
+/// Note what the two numbers are, because they are not the same quantity: the
+/// asked figure is the scroller's height, and the granted one is a whole
+/// window including this screen's header and any panel chrome. A constant
+/// difference between them is expected; a *large* one is the finding.
 ///
 /// This exists because three attempts at making settings taller were all
 /// reasoned from the wrong evidence. The render harness wraps every view in
@@ -176,12 +191,20 @@ struct SettingsView: View {
 ///
 /// DEBUG only — a shipped build has no reason to narrate its own layout.
 enum SettingsPanelProbe {
-    static func report(asked: CGFloat, screen: CGFloat) {
+    static func report(screen: CGFloat, asked: @escaping () -> CGFloat) {
         #if DEBUG
         // A beat after appearing, so the panel has been sized and placed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let asked = asked()
+            // The *menu-bar panel*, not merely the tallest window. Taking the
+            // tallest meant the pinned widget — or any stray debug window —
+            // could be reported as the settings panel, which is worse than no
+            // measurement: it looks like data. The panel is the visible window
+            // whose width matches what settings asked for; the pinned widget is
+            // a different width, and the status popover is not on screen while
+            // settings is.
             let granted = NSApp.windows
-                .filter(\.isVisible)
+                .filter { $0.isVisible && abs($0.frame.width - DW.settingsWidth) < 1 }
                 .map(\.frame)
                 .max(by: { $0.height < $1.height })
             let size = granted.map { "\(Int($0.width))x\(Int($0.height)) at y=\(Int($0.origin.y))" }

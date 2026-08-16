@@ -116,6 +116,17 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
     private var process: Process?
     private var toHelper: FileHandle?
     private var fromHelper: BufferedLineReader?
+    /// The child's stderr, held so teardown is deterministic rather than
+    /// whenever ARC releases the `Pipe`. Both ends: `Pipe` leaves the *parent*
+    /// holding the write end, and while that stays open the child exiting
+    /// produces no EOF at all — so the drain's own EOF branch cannot be relied
+    /// on as cleanup.
+    private var errRead: FileHandle?
+    private var errWrite: FileHandle?
+    /// Bytes from the last stderr read that had no newline yet. `availableData`
+    /// hands back arbitrary chunks, not lines.
+    private let errCarryLock = NSLock()
+    private var errCarry = Data()
     private var nextID: Int64 = 1
     private var consecutiveFailures = 0
     private var nextLaunchNoEarlierThan: Date?
@@ -319,30 +330,50 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
         // the failure the user reports is a healthy dish and an app with
         // nothing to say.
         //
-        // `readabilityHandler` runs on a background queue and consumes whatever
-        // has arrived, so the buffer cannot fill. Empty data means EOF: clear
-        // the handler there or it spins on a closed descriptor for the life of
-        // the app.
+        // `readabilityHandler` runs on a background queue and keeps consuming,
+        // so the pipe is continuously drained. Not "cannot fill" — a pipe is
+        // finite, and a fast enough burst can fill it before the handler is
+        // scheduled, briefly blocking the child. What matters is that it always
+        // drains again, which is exactly what `nullDevice` could not promise.
         let errPipe = Pipe()
         p.standardError = errPipe
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
+        errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
-                handle.readabilityHandler = nil   // the child is gone
+                // EOF. Clearing the handler here is the anti-spin move — a
+                // readability source on a closed descriptor fires forever
+                // otherwise — but it is *not* teardown, which is why
+                // `teardown()` clears it too. `Pipe` leaves the parent holding
+                // the write end, and while that is open the child exiting
+                // produces no EOF: this branch would not run until the `Pipe`
+                // deinits, far too late to call cleanup.
+                handle.readabilityHandler = nil
+                self?.flushStderrCarry()
                 return
             }
-            guard let text = String(data: data, encoding: .utf8) else { return }
-            for line in text.split(separator: "\n") where !line.isEmpty {
-                EngineLog.helper(String(line))
-            }
+            self?.consumeStderr(data)
         }
+        // Owned, so teardown is deterministic rather than whenever ARC gets
+        // round to the `Pipe`. Each respawn installs a fresh handler; without
+        // this the old one stays armed on a handle nobody holds.
+        errRead = errPipe.fileHandleForReading
+        errWrite = errPipe.fileHandleForWriting
 
         do {
             try p.run()
         } catch {
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            errRead = nil
+            errWrite = nil
             scheduleBackoff()
             throw HelperError.launchFailed(error.localizedDescription)
         }
+        // The child has its own descriptor now. Closing the parent's copy is
+        // what makes the child's exit produce a real EOF on the read end —
+        // otherwise this process is itself a writer that never goes away, and
+        // the drain hangs on waiting for a stream nobody will close.
+        try? errWrite?.close()
+        errWrite = nil
 
         let reader = BufferedLineReader(handle: outPipe.fileHandleForReading)
         // The banner is bounded too. The helper only announces itself after its
@@ -413,9 +444,58 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
         if let p = process {
             hardKill(p)
         }
+        // Disarm the drain before dropping the handle. Leaving it to the EOF
+        // branch means leaving it to `Pipe` deinit, and a handler still armed
+        // across a respawn is one reading a descriptor this object no longer
+        // has any reason to hold.
+        errRead?.readabilityHandler = nil
+        flushStderrCarry()
+        try? errRead?.close()
+        try? errWrite?.close()
+        errRead = nil
+        errWrite = nil
         process = nil
         toHelper = nil
         fromHelper = nil
+    }
+
+    /// Reassemble stderr into lines before logging it.
+    ///
+    /// `availableData` returns arbitrary byte chunks — not lines, and not even
+    /// whole UTF-8 sequences. Decoding each chunk on its own split one message
+    /// across two log records, and worse, dropped an entire chunk whenever a
+    /// boundary fell inside a multi-byte character. The helper's own messages
+    /// contain em-dashes (`helper.go` writes "— will retry per request"), so
+    /// that was not a hypothetical: it silently discarded exactly the
+    /// diagnostics this drain exists to keep.
+    ///
+    /// Buffering bytes and cutting on `\n` fixes both. Both reviewers caught
+    /// it independently.
+    private func consumeStderr(_ data: Data) {
+        let lines: [Data] = errCarryLock.withLock {
+            errCarry.append(data)
+            var out = [Data]()
+            while let nl = errCarry.firstIndex(of: UInt8(ascii: "\n")) {
+                out.append(errCarry[errCarry.startIndex..<nl])
+                errCarry = errCarry[errCarry.index(after: nl)...]
+            }
+            return out
+        }
+        for line in lines where !line.isEmpty {
+            EngineLog.helper(String(decoding: line, as: UTF8.self))
+        }
+    }
+
+    /// Emit a trailing line that never got its newline — the shape of a message
+    /// written just before the helper died, which is the one most worth having.
+    private func flushStderrCarry() {
+        let tail: Data? = errCarryLock.withLock {
+            defer { errCarry.removeAll() }
+            return errCarry.isEmpty ? nil : errCarry
+        }
+        if let tail {
+            EngineLog.helper(String(decoding: tail, as: UTF8.self))
+        }
     }
 
     private func hardKill(_ p: Process) {

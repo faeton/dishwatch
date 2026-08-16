@@ -369,8 +369,12 @@ func (h *helper) poll(ctx context.Context, window int) (Dashboard, string, error
 	// Only genuine unreachability, though. This used to swallow *every* error
 	// class, so a firmware update that renamed a field or withdrew the
 	// reflection service produced "Offline" forever on a dish that was up and
-	// answering pings — with the real error going to stderr, which the app
-	// routes to /dev/null. Nothing could tell anyone what had broken. A decode
+	// answering pings — with the real error going to a stderr nobody read.
+	// Nothing could tell anyone what had broken.
+	//
+	// The app drains this stderr into the unified log now, so the second half
+	// of that is fixed. The first half is not, and this is still the wrong
+	// place to report a fault: the *user* sees "Offline" either way. A decode
 	// or reflection failure is a bug report, not a link state.
 	if errors.Is(err, dish.ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) {
 		_ = state.MarkUnreachable(h.addr)

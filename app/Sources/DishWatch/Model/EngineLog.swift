@@ -22,11 +22,21 @@ import os
 ///
 ///     log show --last 1h --predicate 'subsystem == "com.dishwatch"'
 ///
-/// Messages are logged `.public` on purpose. The default redacts interpolated
-/// values to `<private>`, which would turn every one of these into a timestamp
-/// with no content — the exact failure this exists to end. Nothing here carries
-/// anything the user does not already see on screen: local addresses, our own
-/// error strings, and the dish's own field names.
+/// Messages are logged `.public` on purpose: the default redacts interpolated
+/// values to `<private>`, which would turn each of these into a timestamp with
+/// no content — the exact failure this exists to end.
+///
+/// That is a real if small disclosure, and worth stating accurately rather than
+/// waving away. An earlier version of this comment claimed nothing is logged
+/// that the user cannot already see on screen; both reviewers pointed out that
+/// this is false. Helper stderr is forwarded verbatim, so it can carry a
+/// recovered panic value — the UI deliberately receives only "internal error
+/// serving …" — a persistence path under the user's home directory, or the
+/// first 200 bytes of a response that failed to decode.
+///
+/// None of it is credentials, and it stays on the machine. But `.public`
+/// entries are readable in Console and are collected by a sysdiagnose, so treat
+/// this as user-specific diagnostic data rather than as public information.
 enum EngineLog {
     static let subsystem = "com.dishwatch"
 
