@@ -203,7 +203,21 @@
   .dot{width:9px;height:9px;border-radius:50%;background:#30D158;box-shadow:0 0 10px rgba(48,209,88,.7);flex:none}
   .p-state b{font-size:27px;font-weight:660;letter-spacing:-.028em}
   .p-meta{font-size:12.5px;color:rgba(238,242,248,.45);line-height:1.45;font-variant-numeric:tabular-nums}
-  .p-meta .ellip{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .p-meta .id{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+              color:rgba(238,242,248,.34)}
+  /* The hardware gloss. The model string is the first half; the second half is
+     the question it does not answer — does this thing aim itself, or do you? */
+  /* Wraps rather than clips. The gauge beside it is a fixed 84px, so on a
+     narrow phone the left column falls to ~150px — less than this chip's
+     natural width, and a nowrap chip would run underneath the gauge. */
+  .hw{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;
+      max-width:100%;background:rgba(255,255,255,.055);border-radius:9px;padding:5px 10px;
+      font-size:12px;color:rgba(238,242,248,.86)}
+  .hw .sep{color:rgba(238,242,248,.26)}
+  .hw svg{flex:none}
+  .hw .dish{color:#37D7FF}
+  .hw .aim{color:rgba(238,242,248,.5)}
+  .p-cls{font-size:12.5px;color:rgba(238,242,248,.45);margin-top:3px}
   .gauge{position:relative;width:84px;height:84px;flex:none}
   .gauge svg{transform:rotate(-90deg);display:block}
   .gauge-t{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
@@ -221,15 +235,25 @@
   .track{height:2.5px;border-radius:2px;background:rgba(255,255,255,.09);margin-top:9px;overflow:hidden}
   .track i{display:block;height:100%;border-radius:2px}
   .spark-h,.obs-h{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;color:rgba(238,242,248,.45)}
-  .spark-h{margin:16px 0 8px}
+  .spark-h{margin:16px 0 8px;display:flex;align-items:center;gap:10px}
   .obs-h{margin:15px 0 5px}
+  /* The window selector. Cyan is the live selection, not decoration — it is the
+     one control in the panel whose state changes what the traces mean. */
+  .tabs{margin-left:auto;display:flex;gap:4px;font-family:var(--sans);font-size:11.5px;letter-spacing:0}
+  .tabs b,.tabs i{font-style:normal;font-weight:560;padding:3px 9px;border-radius:7px}
+  .tabs b{background:#37D7FF;color:#05070F}
+  .tabs i{background:rgba(255,255,255,.07);color:rgba(238,242,248,.55)}
   .spark{display:flex;align-items:center;gap:10px;margin-bottom:3px}
-  .spark span{font-size:12.5px;color:rgba(238,242,248,.45);width:44px;flex:none}
+  .spark span{font-size:12.5px;color:rgba(238,242,248,.45);width:58px;flex:none}
   .spark svg{flex:1;height:26px;min-width:0}
+  /* Fixed width, not shrink-to-fit: the ↓↑ row has no average to show, and an
+     auto-width empty cell would hand that row a longer trace than the two
+     beside it. The traces have to share a right edge to be comparable. */
   .spark em{font-style:normal;font-size:11.5px;color:rgba(238,242,248,.45);white-space:nowrap;
-            font-variant-numeric:tabular-nums}
+            font-variant-numeric:tabular-nums;width:66px;flex:none}
   .obs{font-size:12.5px;color:rgba(238,242,248,.72);font-variant-numeric:tabular-nums;line-height:1.5;max-width:none}
   .obs.dim{color:rgba(238,242,248,.45)}
+  .obs.warn{color:#FFB340}
   .pills{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.045);
          border-radius:10px;padding:9px 11px;margin-top:13px;font-size:12px;
          color:rgba(238,242,248,.72);font-variant-numeric:tabular-nums}
@@ -237,7 +261,6 @@
   .p-foot{display:flex;align-items:center;gap:8px;margin-top:13px}
   .p-foot .addr{font-size:11.5px;color:rgba(238,242,248,.34);flex:1;font-variant-numeric:tabular-nums}
   .mini{font-size:12.5px;font-weight:560;padding:7px 14px;border-radius:8px}
-  .mini-g{background:rgba(255,255,255,.09);color:#EEF2F8}
   .mini-b{background:#0A84FF;color:#fff}
 
   @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms !important;animation:none !important}}
@@ -289,11 +312,11 @@
         </div>
 
         <div class="stage">
-          <div class="panel" role="img" aria-label="The DishWatch menu-bar panel: connected, signal 71, 42 millisecond ping, 34.9 watts, sparklines for the last 60 seconds, and an observed window of 1 hour 9 minutes.">
+          <div class="panel" role="img" aria-label="The DishWatch menu-bar panel: connected, a Standard Gen2 self-aiming dish, signal 69, 46 millisecond ping, 26.6 watts, sparklines for the last 60 seconds, and an observed window of 2 hours 42 minutes with 4 outages.">
             <div class="p-top">
               <span class="bars" aria-hidden="true"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:15px"></i></span>
               <span class="word">DishWatch</span>
-              <span class="p-time">18:19:50</span>
+              <span class="p-time">01:23:32</span>
               <span class="gear" aria-hidden="true">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10.4a2.4 2.4 0 1 1 0-4.8 2.4 2.4 0 0 1 0 4.8zm5.9-1.6.1-.8-.1-.8 1.3-1-1.2-2.1-1.6.5a5.6 5.6 0 0 0-1.4-.8L10.7 2H8.3l-.3 1.8c-.5.2-1 .5-1.4.8l-1.6-.5-1.2 2.1 1.3 1-.1.8.1.8-1.3 1 1.2 2.1 1.6-.5c.4.3.9.6 1.4.8l.3 1.8h2.4l.3-1.8c.5-.2 1-.5 1.4-.8l1.6.5 1.2-2.1-1.3-1z"/></svg>
               </span>
@@ -302,76 +325,105 @@
             <div class="p-status">
               <div class="p-status-l">
                 <div class="p-state"><span class="dot"></span><b>Connected</b></div>
-                <div class="p-meta">
-                  up 7.6 h · boots 1,325 · Standard
-                  <span class="ellip">ut01000000-00000000-00ed07ca · fw 2026.0…</span>
+                <div class="hw">
+                  <svg class="dish" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                    <path d="M2 11a5 5 0 0 1 10 0" stroke="currentColor" stroke-width="1.4"/>
+                    <circle cx="7" cy="9.1" r="1.9" fill="currentColor"/>
+                  </svg>
+                  Standard Gen2
+                  <span class="sep">·</span>
+                  <svg class="aim" width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 10.4a2.4 2.4 0 1 1 0-4.8 2.4 2.4 0 0 1 0 4.8zm5.9-1.6.1-.8-.1-.8 1.3-1-1.2-2.1-1.6.5a5.6 5.6 0 0 0-1.4-.8L10.7 2H8.3l-.3 1.8c-.5.2-1 .5-1.4.8l-1.6-.5-1.2 2.1 1.3 1-.1.8.1.8-1.3 1 1.2 2.1 1.6-.5c.4.3.9.6 1.4.8l.3 1.8h2.4l.3-1.8c.5-.2 1-.5 1.4-.8l1.6.5 1.2-2.1-1.3-1z"/></svg>
+                  Self-aiming
                 </div>
+                <div class="p-meta">
+                  up 2.7 h · boots 1,327
+                  <span class="id">ut01000000-00000000-00ed07ca</span>
+                  <span class="id">fw 2026.08.08</span>
+                </div>
+                <div class="p-cls">Consumer · cleared to use in motion</div>
               </div>
               <div class="gauge">
                 <svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true">
                   <circle cx="42" cy="42" r="35" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="7"/>
                   <circle cx="42" cy="42" r="35" fill="none" stroke="#FFB340" stroke-width="7"
-                          stroke-linecap="round" stroke-dasharray="156 220"/>
+                          stroke-linecap="round" stroke-dasharray="152 220"/>
                 </svg>
-                <div class="gauge-t"><b>71</b><u>SIGNAL</u></div>
+                <div class="gauge-t"><b>69</b><u>SIGNAL</u></div>
               </div>
             </div>
 
             <div class="rule"></div>
 
             <div class="cells">
-              <div class="pcell"><u>DOWNLOAD</u><div class="val">0.2<s>Mbps</s></div>
-                <div class="track"><i style="width:3%;background:#4B8DF8"></i></div></div>
+              <div class="pcell"><u>DOWNLOAD</u><div class="val">6.1<s>Mbps</s></div>
+                <div class="track"><i style="width:9%;background:#4B8DF8"></i></div></div>
               <div class="pcell"><u>UPLOAD</u><div class="val">0.1<s>Mbps</s></div>
-                <div class="track"><i style="width:2%;background:#6FA8FF"></i></div></div>
-              <div class="pcell"><u>PING</u><div class="val">42<s>ms</s></div>
+                <div class="track"><i style="width:3%;background:#6FA8FF"></i></div></div>
+              <div class="pcell"><u>PING</u><div class="val">46<s>ms</s></div>
                 <div class="sub">drop 0.0% · noise ✓</div></div>
-              <div class="pcell"><u>POWER</u><div class="val">34.9<s>W</s></div>
-                <div class="sub">35.3 Wh since boot</div></div>
+              <div class="pcell"><u>POWER</u><div class="val">26.6<s>W</s></div>
+                <div class="sub">peak 63.1 W</div></div>
             </div>
 
-            <div class="spark-h">LAST 60 S</div>
-            <div class="spark">
-              <span>Ping</span>
-              <svg viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
-                <polyline points="0,4 26,5 48,10 72,15 100,17 132,18 164,17 200,17.5" fill="none"
-                          stroke="#37D7FF" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-              </svg>
-              <em>avg 47 ms</em>
+            <div class="spark-h">
+              LAST 60S
+              <span class="tabs"><b>60s</b><i>5m</i><i>15m</i></span>
             </div>
             <div class="spark">
-              <span>Down</span>
+              <span>Ping ms</span>
               <svg viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
-                <polyline points="0,17 18,16.5 30,17 42,12 52,9 60,15 70,17 80,11 88,17 96,13 104,17 112,10 120,17 128,12 136,17 146,13 156,17 168,15 182,17 200,16.5"
+                <defs><linearGradient id="gp" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#37D7FF" stop-opacity=".30"/>
+                  <stop offset=".85" stop-color="#37D7FF" stop-opacity="0"/>
+                </linearGradient></defs>
+                <polygon points="0,16 14,15 28,16.5 42,14 56,12.5 70,11 84,9 98,5 112,8 126,9.5 140,9 154,11 168,12 182,13.5 200,14.5 200,26 0,26"
+                         fill="url(#gp)"/>
+                <polyline points="0,16 14,15 28,16.5 42,14 56,12.5 70,11 84,9 98,5 112,8 126,9.5 140,9 154,11 168,12 182,13.5 200,14.5"
+                          fill="none" stroke="#37D7FF" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+              </svg>
+              <em>avg 46 ms</em>
+            </div>
+            <div class="spark">
+              <span>↓↑ Mbps</span>
+              <svg viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
+                <polyline points="0,20 8,10 16,6 24,13 32,18 40,19 48,17 56,14 64,16 72,13 80,17 88,15 96,12 104,17 112,14 120,9 128,16 136,11 144,17 152,13 160,7 168,15 176,12 184,17 192,14 200,18"
                           fill="none" stroke="#4B8DF8" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
+                <polyline points="0,22 16,21 32,22 48,21.5 64,22 80,21 96,22 112,21.5 128,22 144,21 160,22 176,21.5 200,21.5"
+                          fill="none" stroke="#6FA8FF" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
               </svg>
               <em></em>
             </div>
             <div class="spark">
-              <span>Power</span>
+              <span>Power W</span>
               <svg viewBox="0 0 200 26" preserveAspectRatio="none" aria-hidden="true">
-                <polyline points="0,18 20,17 38,9 58,7 78,8 96,9 112,8.5 128,15 146,17 164,16 182,14 200,13.5"
+                <defs><linearGradient id="gw" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#FFB340" stop-opacity=".30"/>
+                  <stop offset=".85" stop-color="#FFB340" stop-opacity="0"/>
+                </linearGradient></defs>
+                <polygon points="0,20 12,19 22,12 34,9 46,10 58,8.5 70,9 82,11 94,10.5 106,14 118,17 130,18 142,17 154,18.5 166,18 178,19 190,18 200,18.5 200,26 0,26"
+                         fill="url(#gw)"/>
+                <polyline points="0,20 12,19 22,12 34,9 46,10 58,8.5 70,9 82,11 94,10.5 106,14 118,17 130,18 142,17 154,18.5 166,18 178,19 190,18 200,18.5"
                           fill="none" stroke="#FFB340" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
               </svg>
-              <em>avg 43.3 W</em>
+              <em>avg 35.9 W</em>
             </div>
 
-            <div class="obs-h">OBSERVED 1H 9M</div>
-            <p class="obs">ping 49 · 99% clean · peak ↓186 ↑24 · 30.6 W</p>
-            <p class="obs dim">2.4 GB ↓ · 707.0 MB ↑</p>
+            <div class="obs-h">OBSERVED 2H 42M</div>
+            <p class="obs">ping 51 · 97% clean · peak ↓220 ↑62 · 31.2 W</p>
+            <p class="obs warn">4 outages · 1m dark · longest 58s</p>
+            <p class="obs dim">4.0 GB ↓ · 2.3 GB ↑ · ⚡ 85 Wh in 2h 42m</p>
 
             <div class="pills">
-              <span>◎ Aim −6° / 73°</span><span>✛ GPS ✓ 19</span><span>❄ 1,000 Mbps</span>
+              <span>◎ Pointing 43° / 83°</span><span>✛ GPS ✓ 17</span><span>❄ 1,000 Mbps</span>
               <span class="chev">›</span>
             </div>
 
             <div class="p-foot">
               <span class="addr">192.168.100.1:9200 · live</span>
-              <span class="mini mini-g">Reboot</span>
               <span class="mini mini-b">Pin</span>
             </div>
           </div>
-          <p class="panel-cap">Menu-bar panel · score 71 is amber on purpose (cyan starts at 75)</p>
+          <p class="panel-cap">Menu-bar panel · score 69 is amber on purpose (cyan starts at 75)</p>
         </div>
       </div>
     </div>
