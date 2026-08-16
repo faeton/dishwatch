@@ -1,0 +1,32 @@
+<!-- DishWatch org avatar — the app's own DishArcGlyph, re-cut full-bleed.
+     Geometry mirrors DishArcGlyph in app/Sources/DishWatch/Views/MenuBarIcon.swift
+     (dot 0.32S, inner arc 0.72S, outer arc 1.05S at 45%, clipped to the S-wide
+     frame) and the gradient mirrors renderAppIcon in Render.swift.
+     Differences from the .icns, both deliberate: no inset and no inner rounded
+     rect (GitHub rounds the avatar itself), and the glyph is scaled to 80% of
+     the canvas instead of 50% so it still reads at the 20px GitHub uses most. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="DishWatch">
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101725"/>
+      <stop offset="1" stop-color="#05080F"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="36" result="b"/>
+      <feFlood flood-color="#37D7FF" flood-opacity="0.5"/>
+      <feComposite in2="b" operator="in"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- The outer arc is wider than the glyph frame, so its ends are cut flat.
+         That clip is part of the shipped look, not an accident. -->
+    <clipPath id="frame"><rect x="102" y="0" width="820" height="737"/></clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#field)"/>
+
+  <g clip-path="url(#frame)" filter="url(#glow)">
+    <path d="M81.5 737 A430.5 430.5 0 0 1 942.5 737" fill="none" stroke="#37D7FF" stroke-opacity="0.45" stroke-width="37"/>
+    <path d="M216.8 737 A295.2 295.2 0 0 1 807.2 737" fill="none" stroke="#37D7FF" stroke-width="37"/>
+    <circle cx="512" cy="605.8" r="131.2" fill="#37D7FF"/>
+  </g>
+</svg>

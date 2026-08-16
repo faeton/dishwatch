@@ -1,0 +1,11 @@
+<!-- DishWatch mark, no field. Uses currentColor so it inherits the surrounding
+     text colour — readable on GitHub's light and dark READMEs alike. For the
+     avatar (which needs its own dark field) use avatar.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 460" width="820" height="460" fill="none" role="img" aria-label="DishWatch">
+  <clipPath id="frame"><rect x="0" y="0" width="820" height="460"/></clipPath>
+  <g clip-path="url(#frame)" stroke="currentColor" stroke-width="37">
+    <path d="M-20.5 460 A430.5 430.5 0 0 1 840.5 460" stroke-opacity="0.45"/>
+    <path d="M114.8 460 A295.2 295.2 0 0 1 705.2 460"/>
+  </g>
+  <circle cx="410" cy="328.8" r="131.2" fill="currentColor"/>
+</svg>
