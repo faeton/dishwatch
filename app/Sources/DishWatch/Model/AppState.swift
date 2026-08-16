@@ -299,6 +299,11 @@ final class AppState: ObservableObject {
             d.state = .offline
             if d != data { data = d }
             lastError = error.localizedDescription
+            // The footer shows one line of this; the log keeps the rest. An
+            // unreachable dish arrives here as an ordinary, expected failure,
+            // but so does a decode error from a firmware change, and on screen
+            // those two look identical.
+            EngineLog.failure("poll", error)
         }
         if !hasLoaded { hasLoaded = true }
     }
@@ -411,6 +416,7 @@ final class AppState: ObservableObject {
             actionResult = "Reboot sent. The dish will drop for 1–2 minutes."
         } catch {
             actionResult = "Reboot failed: \(error.localizedDescription)"
+            EngineLog.failure("reboot", error)
         }
         await refresh()
     }
@@ -430,6 +436,7 @@ final class AppState: ObservableObject {
                 ?? "Bank anchored at \(Int(pct))%"
         } catch {
             actionResult = "Could not set the anchor: \(error.localizedDescription)"
+            EngineLog.failure("setAnchor", error)
         }
         await refresh()
     }

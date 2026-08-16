@@ -309,9 +309,33 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
         let inPipe = Pipe(), outPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        // Deliberately not a pipe: the helper writes diagnostics to stderr, and
-        // nobody drains them here. A full pipe buffer would wedge the child.
-        p.standardError = FileHandle.nullDevice
+        // A pipe now, *and* a drain — the two halves are not separable.
+        //
+        // This was `nullDevice`, for a sound reason that was half the picture:
+        // an undrained pipe fills and wedges the child. But the thing being
+        // discarded is the engine's only account of what went wrong. helper.go
+        // notes it directly — on a firmware change that renames a field, the
+        // real error goes to a stderr "which the app routes to /dev/null" — so
+        // the failure the user reports is a healthy dish and an app with
+        // nothing to say.
+        //
+        // `readabilityHandler` runs on a background queue and consumes whatever
+        // has arrived, so the buffer cannot fill. Empty data means EOF: clear
+        // the handler there or it spins on a closed descriptor for the life of
+        // the app.
+        let errPipe = Pipe()
+        p.standardError = errPipe
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil   // the child is gone
+                return
+            }
+            guard let text = String(data: data, encoding: .utf8) else { return }
+            for line in text.split(separator: "\n") where !line.isEmpty {
+                EngineLog.helper(String(line))
+            }
+        }
 
         do {
             try p.run()

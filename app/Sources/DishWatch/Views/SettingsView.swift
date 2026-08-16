@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import os.log
 
 /// Settings — pick the menu-bar icon, the readout, and behaviour. Mirrors the
 /// design's Settings panel.
@@ -173,7 +172,7 @@ struct SettingsView: View {
 /// `os_log` rather than a file: the app is sandboxed, and its stdout goes
 /// nowhere a developer will look. Read it back with
 ///
-///     log show --last 10m --predicate 'subsystem == "com.dishwatch.layout"'
+///     log show --last 10m --predicate 'subsystem == "com.dishwatch"'
 ///
 /// DEBUG only — a shipped build has no reason to narrate its own layout.
 enum SettingsPanelProbe {
@@ -185,12 +184,10 @@ enum SettingsPanelProbe {
                 .filter(\.isVisible)
                 .map(\.frame)
                 .max(by: { $0.height < $1.height })
-            os_log("settings panel: asked %{public}.0f (screen %{public}.0f) → granted %{public}@",
-                   log: OSLog(subsystem: "com.dishwatch.layout", category: "settings"),
-                   type: .info,
-                   asked, screen,
-                   granted.map { "\(Int($0.width))x\(Int($0.height)) at y=\(Int($0.origin.y))" }
-                       ?? "no visible window")
+            let size = granted.map { "\(Int($0.width))x\(Int($0.height)) at y=\(Int($0.origin.y))" }
+                ?? "no visible window"
+            EngineLog.layout.info(
+                "settings panel: asked \(Int(asked), privacy: .public)pt (screen \(Int(screen), privacy: .public)pt) → granted \(size, privacy: .public)")
         }
         #endif
     }
