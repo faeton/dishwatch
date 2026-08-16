@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import os.log
 
 /// Settings — pick the menu-bar icon, the readout, and behaviour. Mirrors the
 /// design's Settings panel.
@@ -38,28 +39,41 @@ struct SettingsView: View {
                     })
             }
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
-            // An explicit height, not `maxHeight`. This is the whole fix, and
-            // the previous two attempts at it were both no-ops.
+            // An explicit height rather than `maxHeight` — but **not** because
+            // the ceiling failed to bind. That was the theory, it was wrong, and
+            // the correction belongs here rather than in a commit message
+            // nobody will reread.
             //
-            // A `ScrollView` has no ideal height of its own — it takes whatever
-            // its parent proposes, and the panel proposes something far short of
-            // the content. `maxHeight` is only a ceiling, so raising it from 460
-            // to 760 to 920 changed a bound that was never the binding
-            // constraint, and the panel came back the same size every time.
+            // Measured with a standalone `NSHostingView`: the same tree reports
+            // 956 pt under `.frame(height:)` and 956 pt under
+            // `.frame(maxHeight:)`. A `ScrollView` does adopt its content's
+            // height beneath a ceiling, so raising 460 → 760 → 920 was a real
+            // change every time, and a test written to catch the difference
+            // passed under its own mutation because there is no difference to
+            // catch.
             //
-            // What made that invisible in review is worth recording: the render
-            // harness *did* show the taller panel, because `Render.snap` wraps
-            // every view in `.fixedSize(vertical: true)`, which forces the ideal
-            // height and makes a ScrollView adopt its content's. So the one
-            // check available here reported success for a change that did
-            // nothing in the app. Measuring the content and stating the height
-            // outright is the version that does not depend on who is proposing
-            // what.
+            // What this spelling buys is only that the height is stated rather
+            // than inferred — one less thing depending on how SwiftUI resolves
+            // an ideal size. It is kept for that, not for a fix it did not make.
+            //
+            // The panel's actual height is still unexplained: raising the cap by
+            // 300 pt did not visibly move it, so something outside this view is
+            // deciding. `SettingsPanelProbe` logs asked-versus-granted on every
+            // open so the next data point is a measurement.
+            //
+            // One methodological note worth keeping, since it cost three
+            // attempts: `Render.snap` wraps every view in
+            // `.fixedSize(vertical: true)`, which forces the ideal height. The
+            // harness therefore shows a tall settings panel no matter what this
+            // line says, and cannot be used as evidence about the real one.
             .frame(height: resolvedHeight)
         }
         .foregroundStyle(DW.text)
         .environment(\.colorScheme, .dark)
-        .onAppear { screenHeight = Self.hostScreenHeight }
+        .onAppear {
+            screenHeight = Self.hostScreenHeight
+            SettingsPanelProbe.report(asked: resolvedHeight, screen: screenHeight)
+        }
     }
 
     /// Content height, capped — so it scrolls only when it genuinely cannot fit.
@@ -143,6 +157,42 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 11)
         .overlay(Divider().background(DW.hairline), alignment: .bottom)
+    }
+}
+
+/// Logs what the settings panel *asked* for against what the window server
+/// actually granted it.
+///
+/// This exists because three attempts at making settings taller were all
+/// reasoned from the wrong evidence. The render harness wraps every view in
+/// `.fixedSize(vertical: true)`, so it showed the tall panel each time and
+/// proved nothing about the real one; and `maxHeight` versus an explicit
+/// `height` turns out to report identical sizes, so that theory was wrong too.
+/// Nobody had measured the panel the system grants.
+///
+/// `os_log` rather than a file: the app is sandboxed, and its stdout goes
+/// nowhere a developer will look. Read it back with
+///
+///     log show --last 10m --predicate 'subsystem == "com.dishwatch.layout"'
+///
+/// DEBUG only — a shipped build has no reason to narrate its own layout.
+enum SettingsPanelProbe {
+    static func report(asked: CGFloat, screen: CGFloat) {
+        #if DEBUG
+        // A beat after appearing, so the panel has been sized and placed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let granted = NSApp.windows
+                .filter(\.isVisible)
+                .map(\.frame)
+                .max(by: { $0.height < $1.height })
+            os_log("settings panel: asked %{public}.0f (screen %{public}.0f) → granted %{public}@",
+                   log: OSLog(subsystem: "com.dishwatch.layout", category: "settings"),
+                   type: .info,
+                   asked, screen,
+                   granted.map { "\(Int($0.width))x\(Int($0.height)) at y=\(Int($0.origin.y))" }
+                       ?? "no visible window")
+        }
+        #endif
     }
 }
 

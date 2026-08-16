@@ -90,6 +90,22 @@ final class SettingsHeightTests: XCTestCase {
         }
     }
 
+    /// Deliberately absent: a test that `.frame(height:)` beats
+    /// `.frame(maxHeight:)`.
+    ///
+    /// One was written, and it passed under the mutation it existed to catch —
+    /// swapping the modifier back left all six tests green. Probing further with
+    /// a standalone `NSHostingView` showed why: both spellings report the same
+    /// ideal size (956 pt for the same tree), because a `ScrollView` *does*
+    /// adopt its content's height under a ceiling. So the claim that
+    /// `maxHeight` "never bound" is false, and there is nothing here for a test
+    /// to assert.
+    ///
+    /// Which leaves the panel's real height unexplained: raising the cap from
+    /// 460 to 760 should have moved it ~300 pt and did not. That constraint is
+    /// outside this view, and `SettingsPanelProbe` logs the granted window size
+    /// so the next open measures it instead of another inference.
+
     /// Nonsense in, something survivable out. The floor's only remaining job.
     func testAbsurdReadingsDoNotProduceAZeroHeightPanel() {
         for h: CGFloat in [0, -100, 50] {

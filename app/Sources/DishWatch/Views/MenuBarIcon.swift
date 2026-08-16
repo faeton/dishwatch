@@ -222,6 +222,24 @@ struct MenuBarIconContent: View {
         }
         .frame(height: 15)
         .padding(.horizontal, 1)
+        // A hairline shadow, only in coloured mode, and only because coloured
+        // mode gave up the thing that made it unnecessary.
+        //
+        // A template image is composited by the bar against the bar's own
+        // backdrop; ours is a flat bitmap laid over whatever the desktop
+        // picture happens to be. Rendered against three wallpapers, the pale
+        // one is the alarming case: it washes out not just the tints but the
+        // *white ink* beside them, so a mis-read appearance takes the whole
+        // readout with it rather than only the colours. The shadow does not
+        // repair that — nothing at this size does — but it keeps a rim of
+        // separation on every background tested, and it is what the system
+        // itself draws behind menu-bar text over bright content.
+        //
+        // Direction follows the ink: a dark halo under light glyphs, a light
+        // one under dark glyphs. Absent entirely when the image is a template,
+        // where it would be flattened into the alpha mask and read as a smudge.
+        .shadow(color: tinted ? (darkBar ? .black.opacity(0.5) : .white.opacity(0.6)) : .clear,
+                radius: tinted ? 1 : 0, y: tinted ? 0.5 : 0)
     }
 
     /// The glyph, or nothing.
