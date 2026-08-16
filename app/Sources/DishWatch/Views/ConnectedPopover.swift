@@ -29,16 +29,46 @@ struct ConnectedPopover: View {
             .saturation(store.quality.isTrustworthy ? 1 : 0)
             .animation(.easeOut(duration: 0.2), value: store.quality.isTrustworthy)
 
+            rebootConfirm
             actionBanner
             footer
         }
         .foregroundStyle(DW.text)
         .overlay(TopGlow(color: DW.cyan), alignment: .top)
-        .confirmationDialog("Reboot the dish?", isPresented: $confirmReboot, titleVisibility: .visible) {
-            Button("Reboot", role: .destructive) { Task { await store.reboot() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The dish will drop the connection for ~1–2 minutes.")
+        .animation(.easeOut(duration: 0.16), value: confirmReboot)
+    }
+
+    /// The reboot confirmation, as panel content rather than a modal.
+    ///
+    /// It was a `.confirmationDialog`, and a `.confirmationDialog` cannot work
+    /// here. `MenuBarExtra(.window)` is a non-activating panel; the dialog is a
+    /// separate AppKit-owned window that has to become key before its buttons
+    /// can take a press, and it never does. The click lands as *panel resigns
+    /// key*, the panel closes, and because dismissal already is the cancel
+    /// outcome, Cancel looked like it worked while Reboot — the one button
+    /// whose success would have been visible — could never fire. The app's only
+    /// destructive action was inert, and reported by a user as "just closes
+    /// window".
+    ///
+    /// PopoverView records exactly this rule for `.sheet`, and the battery
+    /// setup screen was converted to panel content because of it. This was the
+    /// last modal in the app that had not been.
+    @ViewBuilder private var rebootConfirm: some View {
+        if confirmReboot {
+            ConfirmStrip(
+                title: "Reboot the dish?",
+                message: "The connection will drop for ~1–2 minutes.",
+                confirmTitle: "Reboot",
+                onCancel: { confirmReboot = false },
+                onConfirm: {
+                    confirmReboot = false
+                    Task { await store.reboot() }
+                })
+            .padding(.horizontal, 16).padding(.top, 10)
+            // Outside the block that dims on a stale poll, like the action
+            // banner below it. A control the user is mid-way through answering
+            // must not fade out because a poll timed out underneath them.
+            .transition(.opacity)
         }
     }
 
@@ -100,7 +130,9 @@ struct ConnectedPopover: View {
             HStack(spacing: 10) {
                 Text(Date.now, format: .dateTime.hour().minute().second())
                     .font(.system(size: 12)).monospacedDigit().foregroundStyle(DW.textA(0.5))
-                AppMenuButton(showSettings: $showSettings, refresh: { Task { await store.refresh() } })
+                AppMenuButton(showSettings: $showSettings,
+                              refresh: { Task { await store.refresh() } },
+                              reboot: { confirmReboot = true })
             }
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 10)
@@ -146,6 +178,25 @@ struct ConnectedPopover: View {
                     .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.38))
                     .lineLimit(1).minimumScaleFactor(0.8)
                     .padding(.top, 1)
+                // What the dish is provisioned for — a static fact about this
+                // unit, so it belongs with the ID and the firmware rather than
+                // in the metric grid, which is for readings.
+                //
+                // A step brighter than the two lines above it: those are
+                // strings you copy when filing a support ticket, this is one
+                // you read. It is also the answer to a question people ask of
+                // this panel ("what plan is this dish on?") and the ID is not.
+                //
+                // Nothing renders when the dish did not say, which includes a
+                // stationary dish reporting no mobility at all — see
+                // `serviceLine`. That is why it is not gated with the chip
+                // above: the two go quiet under different conditions.
+                if let service = d.serviceLine {
+                    Text(service)
+                        .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.5))
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                        .padding(.top, 3)
+                }
             }
             Spacer()
             SignalGauge(score: d.signalScore, size: 78)
@@ -689,6 +740,7 @@ struct ConnectedPopover: View {
                     detailLine("Elevation", "\(Int(d.elevationDeg))°")
                     detailLine("GPS", "\(d.gpsValid ? "lock" : "no fix") · \(d.gpsSats) sats")
                     detailLine("Ethernet", "\(d.ethMbps) Mbps")
+                    serviceDetail
                 }
                 .padding(.top, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,6 +749,37 @@ struct ConnectedPopover: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    /// The service class again, this time with the sentence that says what it
+    /// is — and, more usefully, what it is not.
+    ///
+    /// Repeating the hero's value is deliberate. The rule this panel keeps is
+    /// that two *figures* over different windows must not sit near each other
+    /// unexplained; a fact and its gloss are not that, and an explanation with
+    /// no visible referent beside it is a worse read than one short repeat.
+    ///
+    /// On screen rather than in a `.help`: tooltips do not reliably fire inside
+    /// a `MenuBarExtra(.window)` panel — it is non-activating, so AppKit's
+    /// tracking mostly does not run. That is the finding docs/macos-ui.md
+    /// records under *Tooltips are not a place to put information*, and it is
+    /// why the energy explanation moved out of one. The disclosure triangle is
+    /// a click, and clicks are the one thing this panel is known to receive.
+    @ViewBuilder private var serviceDetail: some View {
+        if let service = d.serviceLine {
+            Divider().background(DW.hairline).padding(.vertical, 2)
+            detailLine("Service", service)
+            if let why = d.serviceExplanation {
+                Text(why)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DW.textA(0.45))
+                    // Wraps to as many lines as it needs. Without this the
+                    // paragraph is handed one line inside a VStack and truncates
+                    // mid-caveat, which loses precisely the half that matters.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     private var heroLabel: String {
@@ -742,13 +825,14 @@ struct ConnectedPopover: View {
                 .font(.system(size: 11)).monospacedDigit()
                 .foregroundStyle(store.quality.isTrustworthy ? DW.textA(0.38) : DW.amber.opacity(0.8))
             Spacer()
-            HStack(spacing: 7) {
-                DWButton(title: "Reboot") { confirmReboot = true }
-                // The only window we own to "open" is the always-on-top compact
-                // widget — the dish has no real web app to launch.
-                DWButton(title: store.pinnedWidget ? "Unpin" : "Pin", prominent: true) {
-                    store.pinnedWidget.toggle()
-                }
+            // Pin alone. Reboot used to sit here at the same weight, which put
+            // a rare destructive action one stray click from a daily toggle —
+            // see AppMenuButton.reboot, which now carries it.
+            //
+            // The only window we own to "open" is the always-on-top compact
+            // widget — the dish has no real web app to launch.
+            DWButton(title: store.pinnedWidget ? "Unpin" : "Pin", prominent: true) {
+                store.pinnedWidget.toggle()
             }
         }
         .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 15)

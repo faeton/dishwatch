@@ -28,11 +28,13 @@ enum Render {
         // iteration happened to set. Snapshot and put them back.
         let saved = (
             icon: UserDefaults.standard.string(forKey: "iconMode"),
-            fields: UserDefaults.standard.array(forKey: "menuBarFields") as? [String]
+            fields: UserDefaults.standard.array(forKey: "menuBarFields") as? [String],
+            color: UserDefaults.standard.object(forKey: "colorThroughput") as? Bool
         )
         defer {
             UserDefaults.standard.set(saved.icon, forKey: "iconMode")
             UserDefaults.standard.set(saved.fields, forKey: "menuBarFields")
+            UserDefaults.standard.set(saved.color, forKey: "colorThroughput")
         }
         let store = AppState(provider: SampleProvider())
         store.seed()
@@ -58,6 +60,11 @@ enum Render {
         long.firmware = "2026.04.07.mr77639.1"
         long.boots = 1326
         long.uptimeHours = 0.7
+        // The widest service reading there is: `Business Plus · cleared to use
+        // in motion` shares the identity column with the ID and the firmware,
+        // and is longer than either.
+        long.serviceClass = .businessPlus
+        long.serviceMobility = .mobile
         snap(ConnectedPopover(d: long, showSettings: .constant(false)).environmentObject(store)
                 .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "connected-long")
@@ -70,6 +77,11 @@ enum Render {
         var unknown = DishData.sample
         unknown.hardwareShort = "?"
         unknown.hardwareAim = .unknown
+        // The same "draws nothing must also take no space" check for the
+        // service line, which is a separate gate from the chip's: a stationary
+        // dish reports no mobility class at all, so this case is not rare.
+        unknown.serviceClass = .unknown
+        unknown.serviceMobility = .unknown
         snap(ConnectedPopover(d: unknown, showSettings: .constant(false)).environmentObject(store)
                 .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "connected-unknown")
@@ -81,7 +93,8 @@ enum Render {
         // produced a header over blank space — every control here lives inside
         // the scroller, so the harness was checking nothing at all.
         snap(SettingsContent(store: store)
-                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+                .frame(width: DW.settingsWidth).background(DW.panel())
+                .environment(\.colorScheme, .dark),
              dir, "settings")
 
         // The hardware chip has three states and the popover shots only ever
@@ -96,6 +109,18 @@ enum Render {
              }
              .padding(12).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "hardware")
+
+        // The reboot confirmation. It lives behind `@State` in the popover, so
+        // no other shot here can reach it — and it is the app's only
+        // destructive action, which spent several releases as a
+        // `.confirmationDialog` that could not receive a click at all. A
+        // picture of the thing that replaced it is worth having.
+        snap(ConfirmStrip(title: "Reboot the dish?",
+                          message: "The connection will drop for ~1–2 minutes.",
+                          confirmTitle: "Reboot")
+                .padding(16).frame(width: 392).background(DW.panel())
+                .environment(\.colorScheme, .dark),
+             dir, "confirm")
 
         // The shared throughput row at its *hard* shape: both directions a few
         // Mbps and crossing constantly. `DishData.sample` is the easy shape —
@@ -147,6 +172,26 @@ enum Render {
             snap(MenuBarIconContent(store: s).padding(6).background(Color(white: 0.9)),
                  dir, "bar-\(name)")
         }
+        // The coloured readout, on both bars.
+        //
+        // Every other bar shot above is a template image: one ink, tinted for
+        // us, and it cannot be wrong on one appearance and right on the other.
+        // This one is not — it is the single configuration where we choose the
+        // pixels — so the failure it can have is a hue that reads on black and
+        // turns to mud on white. That is invisible in a dark-only screenshot,
+        // which is why both are here.
+        for (name, dark) in [("dark", true), ("light", false)] {
+            let s = AppState(provider: SampleProvider()); s.seed()
+            s.iconMode = .signalBars
+            s.menuBarFields = [.ping, .down, .up]
+            s.colorThroughput = true
+            snap(MenuBarIconContent(store: s, ink: dark ? .white : .black,
+                                    tinted: true, darkBar: dark)
+                    .padding(6)
+                    .background(dark ? Color(white: 0.11) : Color(white: 0.9)),
+                 dir, "bar-color-\(name)")
+        }
+
         return true
     }
 

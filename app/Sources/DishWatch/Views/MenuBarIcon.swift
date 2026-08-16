@@ -11,10 +11,21 @@ import AppKit
 /// light). Status color lives in the popover, where the bar can't show it.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppState
+    /// Which bar we are drawing on, and the reason this is read from the
+    /// environment rather than from `NSApp.effectiveAppearance`: it has to
+    /// re-run the body when the user switches appearance. A colour we sampled
+    /// imperatively inside the renderer would be baked into a cached image that
+    /// nothing invalidates, leaving black text on a black bar until some
+    /// unrelated field happened to move. Only consulted when the readout is
+    /// coloured — a template image needs no appearance at all.
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        Image(nsImage: Self.cachedRender(store: store))
-            .renderingMode(.template)
+        let dark = scheme != .light
+        Image(nsImage: Self.cachedRender(store: store, darkBar: dark))
+            // `.original` or the view layer re-flattens the colours we just
+            // went to the trouble of drawing.
+            .renderingMode(store.colorThroughput ? .original : .template)
             .help(tooltip)
     }
 
@@ -76,14 +87,24 @@ struct MenuBarLabel: View {
         /// Nil unless the ping sparkline is on. When it is, the shape is part of
         /// the image, so this is the exact array `MenuBarSpark` will plot.
         let spark: [Double]?
+        /// Both halves of the colour decision, because both change the pixels.
+        ///
+        /// `darkBar` in particular is not optional to key on: a coloured image
+        /// is not a template, so the ink is baked in, and without this the cache
+        /// would happily serve black-on-black across an appearance switch until
+        /// some unrelated field moved. It is deliberately folded into `colored`
+        /// being true — a template image draws the same bytes on either bar.
+        let colored: Bool
+        let darkBar: Bool
     }
 
     @MainActor private static var cacheKey: GlyphKey?
     @MainActor private static var cacheImage: NSImage?
 
     @MainActor
-    static func cachedRender(store: AppState) -> NSImage {
+    static func cachedRender(store: AppState, darkBar: Bool) -> NSImage {
         let d = store.data
+        let colored = store.colorThroughput
         let key = GlyphKey(
             mode: store.iconMode,
             onBattery: d.onBattery,
@@ -91,10 +112,14 @@ struct MenuBarLabel: View {
             text: store.menuBarText,
             litBars: SignalBars.litBars(fraction: store.menuBarSignalFraction),
             scale: backingScale(),
-            spark: store.showsMenuBarSpark ? MenuBarSpark.plotted(store.menuBarSparkValues) : nil
+            spark: store.showsMenuBarSpark ? MenuBarSpark.plotted(store.menuBarSparkValues) : nil,
+            colored: colored,
+            // Only meaningful when coloured; pinned otherwise so a monochrome
+            // readout does not re-render on an appearance change it ignores.
+            darkBar: colored && darkBar
         )
         if key == cacheKey, let img = cacheImage { return img }
-        let img = render(store: store)
+        let img = render(store: store, darkBar: darkBar)
         cacheKey = key
         cacheImage = img
         return img
@@ -111,12 +136,46 @@ struct MenuBarLabel: View {
     }
 
     @MainActor
-    static func render(store: AppState) -> NSImage {
-        let renderer = ImageRenderer(content: MenuBarIconContent(store: store))
+    static func render(store: AppState, darkBar: Bool) -> NSImage {
+        let colored = store.colorThroughput
+        // Monochrome keeps drawing in black: `isTemplate` throws the RGB away
+        // and keeps only the alpha, so the ink's colour is irrelevant — it is
+        // the shape that survives. Coloured has to pick a real ink, because
+        // nothing downstream will pick one for us.
+        let content = MenuBarIconContent(store: store,
+                                         ink: colored ? (darkBar ? .white : .black) : .black,
+                                         tinted: colored,
+                                         darkBar: darkBar)
+        let renderer = ImageRenderer(content: content)
         renderer.scale = backingScale()
         let img = renderer.nsImage ?? NSImage()
-        img.isTemplate = true   // adopt the menu bar's tint, both appearances
+        // Template only while monochrome. This is the whole trade the setting
+        // makes: a template adopts the bar's tint in every appearance for free,
+        // and it can do that precisely because it has discarded the colours.
+        img.isTemplate = !colored
         return img
+    }
+}
+
+extension MenuBarField {
+    /// The colour this field draws in when the coloured readout is on. `nil`
+    /// means "the bar's own ink".
+    ///
+    /// Only the two throughput figures are tinted, and that is the point: they
+    /// are a *pair*, adjacent, in the same unit, distinguished today by nothing
+    /// but a `↓`/`↑` glyph at 11 pt. Colour is doing work there. Tinting ping,
+    /// power and the rest as well would leave nothing distinguished — it would
+    /// just be a multicoloured menu bar — and each extra hue is another one that
+    /// has to stay legible on both appearances.
+    ///
+    /// The hues match the popover's throughput row, so the pairing is learned
+    /// once and holds in both places.
+    func tint(dark: Bool) -> Color? {
+        switch self {
+        case .down: return DW.downBar(dark: dark)
+        case .up:   return DW.upBar(dark: dark)
+        default:    return nil
+        }
     }
 }
 
@@ -129,6 +188,10 @@ struct MenuBarIconContent: View {
     /// dark panel — black ink on the panel would be an invisible preview, and a
     /// re-implemented one would drift from what the bar actually draws.
     var ink: Color = .black
+    /// Whether the throughput figures take their own hues instead of `ink`.
+    var tinted: Bool = false
+    /// Which appearance those hues are picked for. Ignored unless `tinted`.
+    var darkBar: Bool = true
 
     var body: some View {
         let d = store.data
@@ -143,7 +206,11 @@ struct MenuBarIconContent: View {
             ForEach(store.menuBarTexts) { item in
                 Text(item.text)
                     .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(ink)
+                    // A field with no tint of its own falls back to the ink,
+                    // which is also what every field does while `tinted` is
+                    // off — so the monochrome path is unchanged, not merely
+                    // equivalent.
+                    .foregroundStyle((tinted ? item.field.tint(dark: darkBar) : nil) ?? ink)
             }
         }
         .frame(height: 15)

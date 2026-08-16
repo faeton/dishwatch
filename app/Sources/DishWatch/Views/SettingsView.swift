@@ -12,12 +12,31 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             header
             ScrollView { SettingsContent(store: store) }
-                // Cap height so a long settings list scrolls instead of forcing
-                // the MenuBarExtra panel to an unwieldy size.
-                .frame(maxHeight: 460)
+                .frame(maxHeight: Self.maxContentHeight)
         }
         .foregroundStyle(DW.text)
         .environment(\.colorScheme, .dark)
+    }
+
+    /// How tall the scroller may grow before it starts scrolling.
+    ///
+    /// There has to be a cap: the panel hangs off the menu bar, and one taller
+    /// than the screen is *clipped* by the window server rather than scrolled —
+    /// the controls at the bottom become unreachable, which is worse than a
+    /// scrollbar. But the cap used to be a flat 460 pt, under half the height of
+    /// an ordinary display, so a list of a dozen controls scrolled on a screen
+    /// with room for all of them twice over.
+    ///
+    /// Derived from the *shortest* attached screen, not `NSScreen.main`: an
+    /// `.accessory` app usually has no key window, so `main` is nil or names the
+    /// wrong display, and the panel opens on whichever bar was clicked. Erring
+    /// short costs a scrollbar; erring tall costs unreachable buttons.
+    ///
+    /// Floored at the old 460 so a small or oddly-reported display cannot make
+    /// this a regression.
+    static var maxContentHeight: CGFloat {
+        let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
+        return max(460, min(760, shortest - 140))
     }
 
     /// Back bar — the only way out of in-panel settings.
@@ -74,6 +93,14 @@ struct SettingsContent: View {
                     fieldRow(field)
                 }
             }
+            // Belongs to the readout, not to the app's general behaviour: it
+            // changes how the ticked fields above are drawn, and the preview
+            // that answers it is directly above. Below the next divider it
+            // would be a bar setting filed under "Pinned widget" and "Launch at
+            // login", with the thing it affects scrolled off.
+            toggleRow("Colour the ↓↑ figures", $store.colorThroughput,
+                      note: "the bar stops matching light/dark by itself")
+                .padding(.top, 13)
 
             Divider().background(DW.hairline).padding(.vertical, 16)
 
@@ -131,7 +158,13 @@ struct SettingsContent: View {
     /// real thing rather than a mock-up also means the preview cannot drift.
     private var preview: some View {
         HStack(spacing: 8) {
-            MenuBarIconContent(store: store, ink: DW.text)
+            // `darkBar: true` because this preview sits on the dark panel, not
+            // on the user's actual menu bar. It shows which figures are
+            // coloured, not which shade they will take in a light bar — the
+            // panel cannot honestly show that, and picking the light-bar hues
+            // here would misrepresent them against this background.
+            MenuBarIconContent(store: store, ink: DW.text,
+                               tinted: store.colorThroughput, darkBar: true)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -237,10 +270,17 @@ struct SettingsContent: View {
 
     // MARK: - misc
 
-    private func toggleRow(_ title: String, _ binding: Binding<Bool>) -> some View {
+    /// `note` is for a consequence the title cannot carry without becoming a
+    /// sentence — the same job the grey notes do beside the readout fields.
+    private func toggleRow(_ title: String, _ binding: Binding<Bool>,
+                           note: String? = nil) -> some View {
         HStack {
             Text(title).font(.system(size: 13))
-            Spacer()
+            if let note {
+                Text(note).font(.system(size: 12)).foregroundStyle(DW.textA(0.45))
+                    .lineLimit(1).minimumScaleFactor(0.85)
+            }
+            Spacer(minLength: 8)
             Toggle("", isOn: binding).labelsHidden().toggleStyle(.switch).tint(DW.cyan)
         }
     }

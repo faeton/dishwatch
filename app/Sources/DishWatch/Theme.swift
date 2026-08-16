@@ -14,6 +14,19 @@ extension Color {
 
 /// DishWatch design tokens — mirrors DishWatch.dc.html ("deep-space vibrancy").
 enum DW {
+    // Panel widths
+    /// The status panel. Sized for the metric grid and the sparklines.
+    static let panelWidth: CGFloat = 392
+    /// Settings, which is wider on purpose.
+    ///
+    /// It shares no layout with the status panel — no gauge, no 2×2 grid, no
+    /// charts — and its rows are the one place in the app that carry a control,
+    /// a title, a grey note *and* a live value on a single line. At 392 those
+    /// four were fighting: the notes crowded the titles and the previews on the
+    /// right had nowhere to sit. Nothing else in the app needs to match this
+    /// number, because nothing else is on screen at the same time as it.
+    static let settingsWidth: CGFloat = 468
+
     // Accents
     static let cyan  = Color(hex: 0x37D7FF) // signal / brand
     static let down  = Color(hex: 0x4B8DF8) // download
@@ -29,6 +42,18 @@ enum DW {
     /// throughput line. The hue is what separates it from download, so the hue
     /// stays and the chroma goes — same ~40° of separation, none of the shout.
     static let up    = Color(hex: 0x9B90D9)
+    /// Menu-bar variants of the two throughput hues.
+    ///
+    /// The panel colours cannot be reused as-is. A coloured status item is not a
+    /// template image, so it no longer tints itself to the bar — it draws
+    /// exactly what we hand it, on whichever bar the user happens to run. `up`
+    /// is a pale violet picked to sit *quietly* on a near-black panel (see the
+    /// note above it), and on a white menu bar it is close to unreadable. Each hue
+    /// therefore has a darkened twin: same hue, enough luminance contrast to
+    /// read at 11 pt semibold against white.
+    static func downBar(dark: Bool) -> Color { dark ? down : Color(hex: 0x1B5FCC) }
+    static func upBar(dark: Bool) -> Color { dark ? up : Color(hex: 0x5B4FA8) }
+
     static let amber = Color(hex: 0xFFB340) // power / battery
     static let amberA = Color(hex: 0xFF9F0A)
     static let amberB = Color(hex: 0xFFC44D)

@@ -53,6 +53,19 @@ final class AppState: ObservableObject {
     @Published var refreshInterval: Int {
         didSet { defaults.set(refreshInterval, forKey: "refresh"); restartPolling() }
     }
+    /// Draw the ↓↑ figures in their popover hues rather than in the bar's ink.
+    ///
+    /// Off by default, and the default is not timidity — it is the only setting
+    /// with a real cost. A coloured status item cannot be a *template* image,
+    /// and a template image is what makes the glyph tint itself white on a dark
+    /// bar and black on a light one, for free, including appearances Apple has
+    /// not shipped yet. Turning this on hands that job to us: every other part
+    /// of the readout then has to be inked by hand per appearance, from a
+    /// colour scheme we sample ourselves. It looks good and it is worth
+    /// offering; it is not what a fresh install should silently opt into.
+    @Published var colorThroughput: Bool {
+        didSet { defaults.set(colorThroughput, forKey: "colorThroughput") }
+    }
     /// Demo-only: force the popover into battery layout regardless of real power.
     @Published var simulateBattery: Bool {
         didSet { Task { await refresh() } }
@@ -114,6 +127,7 @@ final class AppState: ObservableObject {
         self.pinnedWidget = defaults.object(forKey: "pinned") as? Bool ?? false
         self.launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? false
         self.refreshInterval = defaults.object(forKey: "refresh") as? Int ?? 1
+        self.colorThroughput = defaults.object(forKey: "colorThroughput") as? Bool ?? false
         self.simulateBattery = false
         restartPolling()
         pinnedController.setVisible(pinnedWidget)

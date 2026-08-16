@@ -33,7 +33,11 @@ struct PopoverView: View {
                     .transition(.opacity)
             }
         }
-        .frame(width: 392)
+        // Settings is wider than the status panel — see DW.settingsWidth. The
+        // panel is resized by the window server as the content changes, which
+        // is the same mechanism that already handles the popover growing when
+        // the detail row expands.
+        .frame(width: showSettings ? DW.settingsWidth : DW.panelWidth)
         // Vibrancy: blurred desktop behind a translucent gradient tint, not a
         // flat opaque card (per design review).
         .background(.ultraThinMaterial)

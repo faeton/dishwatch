@@ -313,7 +313,7 @@ final class MenuBarTests: XCTestCase {
         // horizontal padding unconditionally, so a completely empty status item
         // still reports a non-zero size — the previous assertion passed whether
         // or not the fallback glyph existed.
-        XCTAssertGreaterThan(Self.opaquePixels(MenuBarLabel.render(store: s)), 0,
+        XCTAssertGreaterThan(Self.opaquePixels(MenuBarLabel.render(store: s, darkBar: true)), 0,
                              "the fallback glyph is what keeps Settings reachable")
     }
 
@@ -361,7 +361,7 @@ final class MenuBarTests: XCTestCase {
             s.iconMode = .signalBars
             s.menuBarFields = []   // isolate the glyph: no text in the key
             await s.refresh()
-            return MenuBarLabel.cachedRender(store: s).tiffRepresentation
+            return MenuBarLabel.cachedRender(store: s, darkBar: true).tiffRepresentation
         }
 
         // 12 → 13 lights a bar. The retired `score / 5` bucket put both in
@@ -456,6 +456,57 @@ final class MenuBarTests: XCTestCase {
         }
         XCTAssertEqual(p.windows.last, 900,
                        "changing the window must poll for it, not wait for the next tick")
+    }
+
+    // MARK: - coloured readout
+
+    /// The appearance is baked into a coloured image, so it has to be part of
+    /// the cache key — otherwise switching to light mode serves the white-ink
+    /// render back to a white menu bar and the readout vanishes until some
+    /// unrelated field happens to move.
+    func testColouredReadoutRedrawsWhenTheBarAppearanceFlips() async {
+        func bar(colored: Bool, dark: Bool) async -> Data? {
+            let s = AppState(provider: Fixed(value: .sample),
+                             defaults: scratchDefaults("appearance\(colored)\(dark)"))
+            s.iconMode = .signalBars
+            s.menuBarFields = [.down, .up]
+            s.colorThroughput = colored
+            await s.refresh()
+            return MenuBarLabel.cachedRender(store: s, darkBar: dark).tiffRepresentation
+        }
+
+        let colouredDark = await bar(colored: true, dark: true)
+        let colouredLight = await bar(colored: true, dark: false)
+        XCTAssertNotNil(colouredDark)
+        XCTAssertNotEqual(colouredDark, colouredLight,
+                          "a coloured readout draws different ink per appearance and must key on it")
+
+        // The other half, and the reason the key folds `darkBar` into
+        // `colored`: a template image is the same bytes on either bar, so a
+        // monochrome readout must not re-rasterise on an appearance change it
+        // does not care about.
+        let monoDark = await bar(colored: false, dark: true)
+        let monoLight = await bar(colored: false, dark: false)
+        XCTAssertEqual(monoDark, monoLight,
+                       "a template readout is appearance-independent; redrawing it is wasted work")
+    }
+
+    /// Only the throughput pair takes a hue. Colouring everything would
+    /// distinguish nothing, and each extra colour is one more that has to stay
+    /// legible on both bars.
+    func testOnlyThroughputFieldsAreTinted() {
+        for field in MenuBarField.allCases {
+            let tinted = field == .down || field == .up
+            XCTAssertEqual(field.tint(dark: true) != nil, tinted, "\(field) tint")
+            XCTAssertEqual(field.tint(dark: false) != nil, tinted, "\(field) tint on a light bar")
+        }
+        // The two hues stay distinguishable from each other on both bars —
+        // telling ↓ from ↑ is the entire job.
+        XCTAssertNotEqual(MenuBarField.down.tint(dark: true), MenuBarField.up.tint(dark: true))
+        XCTAssertNotEqual(MenuBarField.down.tint(dark: false), MenuBarField.up.tint(dark: false))
+        // …and each is adjusted for the bar it lands on, rather than one colour
+        // reused on both.
+        XCTAssertNotEqual(MenuBarField.up.tint(dark: true), MenuBarField.up.tint(dark: false))
     }
 }
 

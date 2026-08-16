@@ -44,9 +44,32 @@ type Dashboard struct {
 	// directly, answers PermissionDenied to an unauthenticated caller, and
 	// `get_status` has no such field at any permission level. See
 	// classifyHardware for why that inference is sound enough to display.
-	HardwareAim       string  `json:"hardwareAim"`
-	DeviceID          string  `json:"deviceId"`
-	Firmware          string  `json:"firmware"`
+	HardwareAim string `json:"hardwareAim"`
+	DeviceID    string `json:"deviceId"`
+	Firmware    string `json:"firmware"`
+	// What the dish is provisioned for, normalized out of `classOfService` and
+	// `mobilityClass`. Tokens, not prose — the app has its own wording, the same
+	// split HardwareAim uses.
+	//
+	// **Not the subscription name.** The dish knows the service *class* it is
+	// allowed to operate under and nothing about billing: there is no plan
+	// string, price or renewal date anywhere in `dish_get_status`, and the
+	// account API that has them is not reachable from the dish. So this says
+	// "Consumer, cleared to move" and must never be dressed up as "Roam" — that
+	// is a SKU name, and inferring one from these two enums would be inventing a
+	// fact about someone's account.
+	//
+	// Empty is a real case for both, and means different things:
+	//   - ServiceClass: the dish reported UNKNOWN_USER_CLASS_OF_SERVICE, or is
+	//     offline. Nothing to say.
+	//   - ServiceMobility: genuinely ambiguous. STATIONARY is the zero value of
+	//     `UserMobilityClass`, and we unmarshal with EmitUnpopulated:false
+	//     (internal/dish/client.go), so a stationary dish and firmware that has
+	//     no such field both arrive as "". We therefore claim nothing rather
+	//     than defaulting to "fixed location" — which would be right most of the
+	//     time and a false statement about the dish's own report the rest of it.
+	ServiceClass      string  `json:"serviceClass"`
+	ServiceMobility   string  `json:"serviceMobility"`
 	DownMbps          float64 `json:"downMbps"`
 	UpMbps            float64 `json:"upMbps"`
 	PingMs            float64 `json:"pingMs"`
@@ -241,28 +264,30 @@ func shortestSeries(series ...[]float64) int {
 
 func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Dashboard {
 	d := Dashboard{
-		SchemaVersion: DashboardSchemaVersion,
-		State:         swiftState(derivedState(s)),
-		SignalScore:   signalScore(s),
-		UptimeHours:   float64(s.DeviceState.UptimeS) / 3600,
-		Boots:         int(s.DeviceInfo.Bootcount),
-		HardwareShort: hardwareShort(s.DeviceInfo.HardwareVersion),
-		HardwareAim:   classifyHardware(s.DeviceInfo.HardwareVersion).Aim,
-		DeviceID:      deviceID(s),
-		Firmware:      trimFirmware(s.DeviceInfo.SoftwareVersion),
-		DownMbps:      round1(s.DownlinkThroughputBps / 1e6),
-		UpMbps:        round1(s.UplinkThroughputBps / 1e6),
-		PingMs:        round1(s.PopPingLatencyMs),
-		DropPct:       round1(s.PopPingDropRate * 100),
-		NoiseOK:       s.IsSnrAboveNoiseFloor && !s.IsSnrPersistentlyLow,
-		DownBarFrac:   clampF(s.DownlinkThroughputBps/2e8, 0, 1),
-		UpBarFrac:     clampF(s.UplinkThroughputBps/4e7, 0, 1),
-		AzimuthDeg:    s.BoresightAzimuthDeg,
-		ElevationDeg:  s.BoresightElevationDeg,
-		GpsValid:      s.GpsStats.GpsValid,
-		GpsSats:       s.GpsStats.GpsSats,
-		EthMbps:       s.EthSpeedMbps,
-		DishAddr:      addr,
+		SchemaVersion:   DashboardSchemaVersion,
+		State:           swiftState(derivedState(s)),
+		SignalScore:     signalScore(s),
+		UptimeHours:     float64(s.DeviceState.UptimeS) / 3600,
+		Boots:           int(s.DeviceInfo.Bootcount),
+		HardwareShort:   hardwareShort(s.DeviceInfo.HardwareVersion),
+		HardwareAim:     classifyHardware(s.DeviceInfo.HardwareVersion).Aim,
+		DeviceID:        deviceID(s),
+		Firmware:        trimFirmware(s.DeviceInfo.SoftwareVersion),
+		ServiceClass:    serviceClass(s.ClassOfService),
+		ServiceMobility: serviceMobility(s.MobilityClass),
+		DownMbps:        round1(s.DownlinkThroughputBps / 1e6),
+		UpMbps:          round1(s.UplinkThroughputBps / 1e6),
+		PingMs:          round1(s.PopPingLatencyMs),
+		DropPct:         round1(s.PopPingDropRate * 100),
+		NoiseOK:         s.IsSnrAboveNoiseFloor && !s.IsSnrPersistentlyLow,
+		DownBarFrac:     clampF(s.DownlinkThroughputBps/2e8, 0, 1),
+		UpBarFrac:       clampF(s.UplinkThroughputBps/4e7, 0, 1),
+		AzimuthDeg:      s.BoresightAzimuthDeg,
+		ElevationDeg:    s.BoresightElevationDeg,
+		GpsValid:        s.GpsStats.GpsValid,
+		GpsSats:         s.GpsStats.GpsSats,
+		EthMbps:         s.EthSpeedMbps,
+		DishAddr:        addr,
 	}
 
 	if h != nil {
@@ -389,6 +414,64 @@ func deviceID(s *dish.Status) string {
 		return s.DeviceInfo.Id
 	}
 	return s.DeviceInfo.HardwareVersion
+}
+
+// Tokens for Dashboard.ServiceClass and Dashboard.ServiceMobility. Deliberately
+// our own vocabulary rather than the dish's SCREAMING_CASE enum names: the wire
+// contract should not break the day SpaceX renames a constant, and "STATIONARY"
+// is not a word any surface wants to print.
+const (
+	svcUnknown      = ""
+	svcConsumer     = "consumer"
+	svcBusiness     = "business"
+	svcBusinessPlus = "businessPlus"
+	svcAviation     = "aviation"
+
+	mobUnknown = ""
+	mobFixed   = "fixed"
+	mobNomadic = "nomadic"
+	mobMobile  = "mobile"
+)
+
+// serviceClass maps `UserClassOfService` onto our tokens.
+//
+// The default arm covers three cases that all deserve the same answer: the
+// dish's explicit UNKNOWN_USER_CLASS_OF_SERVICE, an absent field, and a class
+// added to the enum after this build shipped. Guessing at the third is how you
+// end up labelling a new tier as an old one.
+func serviceClass(v string) string {
+	switch v {
+	case "CONSUMER":
+		return svcConsumer
+	case "BUSINESS":
+		return svcBusiness
+	case "BUSINESS_PLUS":
+		return svcBusinessPlus
+	case "COMMERCIAL_AVIATION":
+		return svcAviation
+	default:
+		return svcUnknown
+	}
+}
+
+// serviceMobility maps `UserMobilityClass` onto our tokens.
+//
+// Note what is *not* here: a case for "". STATIONARY is that enum's zero value,
+// so a fixed dish omits the field entirely and lands in the default arm — see
+// the Dashboard field comment. Mapping "" to mobFixed would be right for most
+// dishes and wrong for any firmware that predates the field, and there is no
+// way from here to tell the two apart.
+func serviceMobility(v string) string {
+	switch v {
+	case "STATIONARY":
+		return mobFixed
+	case "NOMADIC":
+		return mobNomadic
+	case "MOBILE":
+		return mobMobile
+	default:
+		return mobUnknown
+	}
 }
 
 // Aim values for Dashboard.HardwareAim. The empty string is a real case and

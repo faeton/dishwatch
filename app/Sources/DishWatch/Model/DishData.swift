@@ -46,6 +46,86 @@ enum DishAim: String, Decodable, Sendable {
     }
 }
 
+/// The service class the dish is provisioned under — `classOfService` on the
+/// wire, normalized by dashboard.go.
+///
+/// This is the nearest thing the dish has to "what plan am I on", and it is not
+/// that. It says which tier of service the hardware is cleared to operate under;
+/// the plan *name*, its price and its renewal date live in Starlink's account
+/// API, which is not reachable from the dish at all. So the labels here are the
+/// class, said plainly, and never a SKU — no "Roam", no "Residential". Naming a
+/// product from two enums would be inventing a fact about someone's billing,
+/// which is the one thing this app has no business guessing at.
+///
+/// `.unknown` is a real case and the default: the dish's own UNKNOWN value, an
+/// offline snapshot, and a class added to the enum after this build shipped all
+/// land here and all render as nothing.
+enum ServiceClass: String, Decodable, Sendable {
+    case consumer
+    case business
+    case businessPlus
+    case aviation
+    case unknown = ""
+
+    var label: String {
+        switch self {
+        case .consumer:     return "Consumer"
+        case .business:     return "Business"
+        case .businessPlus: return "Business Plus"
+        case .aviation:     return "Aviation"
+        case .unknown:      return ""
+        }
+    }
+}
+
+/// Where the dish is cleared to be used — `mobilityClass` on the wire.
+///
+/// Said as a permission rather than as a state, because that is what it is: a
+/// `.fixed` dish is not "currently stationary", it is *only allowed* to be at
+/// its service address. Getting that backwards would turn a provisioning fact
+/// into a live reading, and the panel already has plenty of those.
+///
+/// `.unknown` is both "firmware too old to say" and, unavoidably, "STATIONARY" —
+/// that is the zero value of the dish's enum and the field is dropped when
+/// unset, so the two are indistinguishable by the time it reaches here. See the
+/// `ServiceMobility` note in dashboard.go. Both render as nothing.
+enum ServiceMobility: String, Decodable, Sendable {
+    case fixed
+    case nomadic
+    case mobile
+    case unknown = ""
+
+    /// Lower case: these are read as a clause after the class ("Consumer ·
+    /// cleared to move"), not as standalone titles.
+    var label: String {
+        switch self {
+        case .fixed:   return "one fixed address"
+        case .nomadic: return "cleared to move"
+        case .mobile:  return "cleared to use in motion"
+        case .unknown: return ""
+        }
+    }
+
+    /// The sentence the detail row prints under the value. Says what the
+    /// permission means in terms of what the owner may do, since "nomadic" and
+    /// "mobile" are a distinction almost nobody knows they have.
+    var explanation: String {
+        switch self {
+        // Each names its subject rather than opening on "it". The sentence sits
+        // under a label/value row, not inside a paragraph, so there is no
+        // antecedent in front of it to carry a pronoun.
+        case .fixed:
+            return "The dish is registered to a single service address; using it elsewhere needs a change on the account."
+        case .nomadic:
+            return "The dish may be set up at other locations, but not used while the vehicle is moving."
+        case .mobile:
+            return "The dish may be used while the vehicle, boat or aircraft is moving."
+        case .unknown:
+            return ""
+        }
+    }
+}
+
 /// One snapshot of dish + power state. Mirrors the Go `Dashboard` DTO emitted by
 /// `dishwatch json` — see dashboard.go.
 ///
@@ -70,6 +150,8 @@ struct DishData: Decodable, Sendable, Equatable {
     var hardwareAim: DishAim = .unknown
     var deviceId: String = ""
     var firmware: String = ""
+    var serviceClass: ServiceClass = .unknown
+    var serviceMobility: ServiceMobility = .unknown
 
     // throughput / link
     var downMbps: Double = 0
@@ -137,6 +219,40 @@ struct DishData: Decodable, Sendable, Equatable {
     var anchoredAgoText: String = ""
 
     var stateLabel: String { state.rawValue }
+
+    /// The identity block's service reading: the class, then what the dish is
+    /// cleared to do under it.
+    ///
+    /// `nil` when the dish said neither — an offline snapshot, and also a
+    /// stationary dish, because STATIONARY is the wire enum's zero value and is
+    /// dropped before it ever reaches us. Nothing renders, which is the right
+    /// answer to "we do not know" and the only one available for "we cannot
+    /// tell those two apart".
+    var serviceLine: String? {
+        let parts = [serviceClass.label, serviceMobility.label].filter { !$0.isEmpty }
+        guard let first = parts.first else { return nil }
+        // The mobility labels are written lower case, as a clause trailing the
+        // class. Firmware that reports mobility and no class leaves one leading
+        // the line instead, where a lower-case start reads as a fragment.
+        let head = first.prefix(1).uppercased() + first.dropFirst()
+        return ([head] + parts.dropFirst()).joined(separator: " · ")
+    }
+
+    /// What that line means, spelled out for the detail row — including the
+    /// thing it is most likely to be mistaken for.
+    ///
+    /// The caveat is the load-bearing half. "Consumer · cleared to use in
+    /// motion" reads exactly like a plan name, and a plan name is the one thing
+    /// not on this wire: `dish_get_status` carries no SKU, price or renewal
+    /// date, and the account API that does is unreachable from the dish. Anyone
+    /// holding this up against their bill is owed the reason the two need not
+    /// use the same words.
+    var serviceExplanation: String? {
+        guard serviceLine != nil else { return nil }
+        let caveat = "This is the service class the dish reports for itself, not the plan name on your bill — the dish is never told that."
+        let what = serviceMobility.explanation
+        return what.isEmpty ? caveat : "\(what) \(caveat)"
+    }
 
     /// Compact "Xh Ym" / "Ym" string for time-to-empty, or "—" when there is
     /// none. Zero is the sentinel `dashboard.go` writes when no honest average
@@ -269,6 +385,8 @@ extension DishData {
         d.hardwareAim = .manual
         d.deviceId = "mini1_panda"
         d.firmware = "2026.04.07"
+        d.serviceClass = .consumer
+        d.serviceMobility = .mobile
         d.downMbps = 142.5
         d.upMbps = 14.2
         d.pingMs = 31
@@ -327,6 +445,7 @@ extension DishData {
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case state, signalScore, uptimeHours, boots, hardwareShort, hardwareAim, deviceId, firmware
+        case serviceClass, serviceMobility
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
         case energyCoversBoot, energySeconds, energyAvgW
@@ -373,6 +492,13 @@ extension DishData {
         d.hardwareAim = s(.hardwareAim, d.hardwareAim)
         d.deviceId = s(.deviceId, d.deviceId)
         d.firmware = s(.firmware, d.firmware)
+        // Lenient for the same reason `hardwareAim` is: a class or mobility
+        // value this build has never heard of — SpaceX adds to both enums —
+        // fails its `RawRepresentable` init and falls back to `.unknown`, which
+        // renders as nothing. A tier we cannot name is not a reason to drop the
+        // whole snapshot, and it is certainly not a reason to name it wrongly.
+        d.serviceClass = s(.serviceClass, d.serviceClass)
+        d.serviceMobility = s(.serviceMobility, d.serviceMobility)
         d.downMbps = s(.downMbps, d.downMbps)
         d.upMbps = s(.upMbps, d.upMbps)
         d.pingMs = s(.pingMs, d.pingMs)

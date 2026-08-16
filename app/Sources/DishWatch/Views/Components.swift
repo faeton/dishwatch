@@ -6,11 +6,28 @@ import AppKit
 struct AppMenuButton: View {
     @Binding var showSettings: Bool
     var refresh: () -> Void = {}
+    /// Reboot, for the screens that offer it. `nil` leaves the item out.
+    ///
+    /// It lives in this menu rather than in the footer, where it spent several
+    /// releases as a button the same size as Pin. That weighting was backwards
+    /// on both axes that matter: Pin is a daily toggle that costs nothing to
+    /// press by accident, and a reboot is a once-in-a-while troubleshooting act
+    /// that costs one to two minutes of outage — on a moving dish, at whatever
+    /// moment you happened to misclick. Rare and destructive is what a menu is
+    /// for, which is where Quit already sits.
+    ///
+    /// The ellipsis is load-bearing in the macOS sense: it promises the press
+    /// opens a confirmation rather than rebooting on the spot.
+    var reboot: (() -> Void)? = nil
 
     var body: some View {
         Menu {
             Button("Settings…") { showSettings = true }
             Button("Refresh now", action: refresh)
+            if let reboot {
+                Divider()
+                Button("Reboot dish…", action: reboot)
+            }
             Divider()
             Button("Quit DishWatch") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
@@ -455,17 +472,79 @@ struct SectionLabel: View {
 struct DWButton: View {
     var title: String
     var prominent: Bool = false
+    /// Red variant, for the one action in this app that costs something to get
+    /// wrong. Never the sole carrier of that meaning — it only ever appears
+    /// under a sentence naming the consequence — but next to a Cancel at
+    /// 11.5 pt it is the difference between reading the pair and scanning it.
+    var destructive: Bool = false
     var action: () -> Void = {}
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11.5, weight: prominent ? .semibold : .medium))
-                .foregroundStyle(prominent ? Color(hex: 0x04121B) : DW.text)
+                .font(.system(size: 11.5, weight: prominent || destructive ? .semibold : .medium))
+                .foregroundStyle(foreground)
                 .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(prominent ? DW.cyan : Color.white.opacity(0.08),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    // Tinted rather than filled: a solid red block beside a grey Cancel reads
+    // as the default action, and this one should never be the easy press.
+    private var foreground: Color {
+        if destructive { return DW.red }
+        return prominent ? Color(hex: 0x04121B) : DW.text
+    }
+
+    private var background: Color {
+        if destructive { return DW.red.opacity(0.16) }
+        return prominent ? DW.cyan : Color.white.opacity(0.08)
+    }
+}
+
+/// A two-button confirmation, drawn *inside* the panel.
+///
+/// This exists because the obvious alternatives do not work here. `.sheet`,
+/// `.alert` and `.confirmationDialog` all present AppKit-owned windows, and
+/// `MenuBarExtra(.window)` is non-activating: those windows never become key,
+/// so their buttons never receive a press, while the click that was aimed at
+/// them makes the panel resign key and close. The failure is quiet and
+/// asymmetric — a cancel button looks like it worked, because dismissal is
+/// already the cancel outcome — which is how the reboot confirmation shipped
+/// inert. PopoverView documents the same rule for `.sheet`.
+///
+/// So: panel content, plain SwiftUI buttons, clickable for the same reason
+/// every other control in the popover is.
+///
+/// A separate view rather than a private block in the popover so the render
+/// harness can snapshot it. It sits behind `@State`, and a state-gated view is
+/// one no screenshot would otherwise ever show.
+struct ConfirmStrip: View {
+    var title: String
+    /// The consequence, not a restatement of the verb. It is the reason the
+    /// action is two steps instead of one.
+    var message: String
+    var confirmTitle: String
+    var onCancel: () -> Void = {}
+    var onConfirm: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(message)
+                .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 7) {
+                Spacer(minLength: 0)
+                DWButton(title: "Cancel", action: onCancel)
+                DWButton(title: confirmTitle, destructive: true, action: onConfirm)
+            }
+            .padding(.top, 1)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(DW.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9)
+            .strokeBorder(DW.red.opacity(0.28), lineWidth: 0.5))
     }
 }
 
