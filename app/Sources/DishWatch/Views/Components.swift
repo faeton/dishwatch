@@ -260,6 +260,25 @@ struct Spark: View {
         return t.values[i]
     }
 
+    /// The mean of the samples a trace carries, or nil when it carries none.
+    ///
+    /// Finite samples only, on the same grounds as `sample` and for a sharper
+    /// reason: one infinity does not merely render badly in a sum, it takes the
+    /// whole average with it. Nil rather than 0 for a trace with nothing finite
+    /// in it, so a caller can tell "nothing to say" from "the link moved no
+    /// data", which are different facts.
+    ///
+    /// Zeros count. For ping and power a zero means *not measured* and the Go
+    /// side drops it (`nonzeroMean`, `meanPositive`); for throughput a zero is a
+    /// real second in which nothing moved, and excluding those would turn the
+    /// figure into "mean while busy" — a number about traffic shape presented as
+    /// one about the window.
+    static func mean(_ t: SparkTrace) -> Double? {
+        var sum = 0.0, n = 0
+        for v in t.values where v.isFinite { sum += v; n += 1 }
+        return n > 0 ? sum / Double(n) : nil
+    }
+
     /// The column nearest a horizontal position, clamped to the chart.
     static func column(atX x: CGFloat, width: CGFloat, span: Int) -> Int {
         guard span > 0, width > 0 else { return 0 }

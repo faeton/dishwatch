@@ -146,6 +146,7 @@ been up a while, which is every dish anyone tests against.
 | Drop | current | now | grid sub-label | `drop 0.2%` |
 | Down | **peak** | observed | footer | `peak ↓186` |
 | Up | **peak** | observed | footer | `peak ↑41` |
+| Down / Up | mean, idle seconds included | selected spark window | spark trailing | `avg ↓12.4 ↑1.4` |
 | Down / Up | **volume** | observed | footer | `4.2 GB ↓ · 0.6 GB ↑` |
 | Power | mean, zeros excluded | selected spark window | spark trailing | `avg 24.0 W` |
 | Power | mean, zeros excluded | observed | grid sub + footer | `23.8 W session` |
@@ -153,6 +154,40 @@ been up a while, which is every dish anyone tests against.
 
 Deliberately absent: any session mean for down or up. The Go DTO does not even
 carry the field, so the view cannot accidentally render one.
+
+### The ↓↑ spark trailing shows a mean (2026-08-17)
+
+That slot was empty until now, on the grounds that the only statistic on offer
+for it was a mean and a mean there would lie. Both halves were right and the
+conclusion still did not follow: with `avg 49 ms` beside ping and `avg 46.4 W`
+beside power and nothing beside throughput, the question the panel raises is
+*why is this row missing its figure* — which the emptiness cannot answer.
+
+It now shows `avg ↓12.4 ↑1.4`, one figure per direction over the plotted window.
+This is a deliberate narrowing of the rule above, not an exception to it. What
+makes a lone `avg 3` dangerous is that it is *alone*: a summary cell offers a
+mean and nothing else, so a reader takes it for what the link can do. In this
+row the mean has company — the trace it summarizes is immediately to its left,
+so the shape it flattens is on screen; the peak that does describe capability is
+in the Observed footer two blocks down; and the heading names the window it
+covers. The rule stands everywhere a throughput mean would appear without those
+three, which is every summary figure the app shows.
+
+Computed from the traces the row actually drew (`Spark.mean`), not from
+`downAvg`/`upAvg` on the DTO. Those carry the same numbers, but reading the
+traces keeps the figure tied to what is on screen: it follows the 60s/5m/15m
+buttons for free, and a direction whose ring the dish never sent contributes no
+number rather than a fabricated `↑0.0`.
+
+Idle seconds are included, unlike ping (`nonzeroMean`) and power
+(`meanPositive`), where a zero means *not measured*. A second in which no data
+moved is a real second of the window; excluding those would answer "how fast
+while busy", which nobody asked and which flatters a bad link.
+
+Scrubbing still overrides it with the sample under the pointer, as before — the
+`avg` word is what distinguishes the two readouts, since both are `↓n ↑n`.
+`Spark.mean` skips non-finite values for a sharper reason than `sample` does:
+one infinity in the sum takes the entire average with it.
 
 ### Download and upload share one chart (2026-08-15)
 

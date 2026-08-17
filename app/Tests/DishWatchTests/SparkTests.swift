@@ -108,6 +108,34 @@ final class SparkTests: XCTestCase {
         XCTAssertEqual(Spark.sample(t, at: 4, span: span), 5)
     }
 
+    /// The ↓↑ row's idle figure is a mean, and it reads the plotted window — so
+    /// per direction, over exactly the samples on screen.
+    func testMeanIsPerDirectionOverThePlottedWindow() {
+        let down = SparkTrace(symbol: "↓", values: [120, 150, 90, 200], color: .clear)
+        let up = SparkTrace(symbol: "↑", values: [10, 12, 8, 14], color: .clear)
+        XCTAssertEqual(Spark.mean(down), 140)
+        XCTAssertEqual(Spark.mean(up), 11, "the quiet direction keeps its own mean, not the pair's")
+    }
+
+    /// Idle seconds are part of a throughput window, not missing from it: a
+    /// zero-excluding mean would answer "how fast while busy", which is a
+    /// different question and a flattering one.
+    func testMeanCountsIdleSeconds() {
+        XCTAssertEqual(Spark.mean(trace([0, 0, 0, 40])), 10)
+        XCTAssertEqual(Spark.mean(trace([0, 0, 0])), 0, "a window with no traffic has a mean of zero")
+    }
+
+    /// A mean has the same finiteness problem as a sample, and worse: one
+    /// infinity in the sum takes the whole average with it.
+    func testMeanIgnoresNonFiniteValuesAndEmptyTraces() {
+        XCTAssertEqual(Spark.mean(trace([1, .infinity, 5, .nan])), 3)
+        XCTAssertEqual(Spark.mean(trace([-.infinity, 2])), 2)
+        XCTAssertNil(Spark.mean(trace([.nan, .infinity])), "no finite sample, no mean")
+        // Nil, not 0: "nothing to say" and "the link moved no data" are
+        // different facts, and only the second one is worth printing.
+        XCTAssertNil(Spark.mean(trace([])))
+    }
+
     /// The scrub readout's formatter is the one number on screen that comes
     /// straight from a ring sample rather than from a bounded statistic, so it
     /// must not be reachable by `Int(Double)`, which traps.

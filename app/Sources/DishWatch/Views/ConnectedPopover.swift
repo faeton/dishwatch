@@ -609,13 +609,16 @@ struct ConnectedPopover: View {
                   marker: scrub?.row == row ? scrub?.column : nil)
                 .frame(height: 24)
                 .overlay(scrubTarget(row, span: span))
-            // Keeps the fixed width even when there is no trailing figure, so
-            // dropping one row's label does not shift the sparklines above it.
+            // Fixed, and wide enough for the longest of the three: the ↓↑ row's
+            // `avg ↓12.4 ↑1.4` carries two figures where the others carry one.
+            // Sized for all rows alike — a per-row width would step the charts'
+            // right edges against each other, and a row losing its figure
+            // entirely (no ring, no peak) would shift the sparklines above it.
             trailing(row, drawn, span: span)
                 .font(.system(size: 11)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .foregroundStyle(DW.textA(0.45))
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: 82, alignment: .trailing)
         }
     }
 
@@ -640,11 +643,8 @@ struct ConnectedPopover: View {
     /// The figure to the right of a trace: its window statistic normally, and
     /// the value under the pointer while that row is being scrubbed.
     ///
-    /// A scrubbed figure is a *sample*, not a statistic, which is the only
-    /// reason the ↓↑ row may show one at all. Its idle trailing stays empty on
-    /// purpose — a mean throughput there reads as capability, the defect
-    /// docs/macos-ui.md opens with — and naming one second of the trace claims
-    /// nothing of the sort.
+    /// A scrubbed figure is a *sample*, not a statistic, so it is the row's own
+    /// unit under the pointer and nothing more.
     private func trailing(_ row: SparkRow, _ drawn: [SparkTrace], span: Int) -> Text {
         if let s = scrub, s.row == row {
             var out = Text("")
@@ -662,9 +662,40 @@ struct ConnectedPopover: View {
         }
         switch row {
         case .ping:       return Text("avg \(Int(d.pingAvg)) ms")
-        case .throughput: return Text("")
+        case .throughput: return Self.avgText(drawn)
         case .power:      return Text("avg \(String(format: "%.1f", d.powerAvg)) W")
         }
+    }
+
+    /// The ↓↑ row's idle figure: a **mean** across the window on screen, the
+    /// same statistic its two neighbours show.
+    ///
+    /// A mean throughput on its own is the figure docs/macos-ui.md warns about —
+    /// it measures utilization, so an idle second counts against a flawless link
+    /// and `avg 3` can read as a broken dish. What makes it safe *here* is
+    /// company. The chart it captions is right beside it, so the shape the mean
+    /// flattens is on screen; the peak — the figure that does describe the
+    /// link's capability — is in the Observed footer two blocks down; and the
+    /// heading names the window. A lone `avg 3` in a summary cell has none of
+    /// that, which is where the rule still applies.
+    ///
+    /// Zeros included, unlike ping and power: for those a zero means *not
+    /// measured*, and for throughput it means a second in which nothing moved.
+    ///
+    /// Per direction, and only for traces actually drawn: same rule as the
+    /// legend and the scrub readout, so firmware with no uplink ring does not
+    /// get an `↑0.0` invented for it.
+    private static func avgText(_ drawn: [SparkTrace]) -> Text {
+        let means = drawn.compactMap { t in Spark.mean(t).map { (t, $0) } }
+        guard !means.isEmpty else { return Text("") }
+        var out = Text("avg")
+        for (t, m) in means {
+            let value = Text(" \(t.symbol)\(MenuBarField.compactMbps(m))")
+            // The colour is what ties the number to its line; a single-trace row
+            // has nothing to tie it to and stays in the dimmed default.
+            out = out + (t.symbol.isEmpty ? value : value.foregroundStyle(t.color))
+        }
+        return out
     }
 
     /// The value under the pointer, in the row's own unit.
