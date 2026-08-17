@@ -225,6 +225,55 @@ Everything else the submission needs is in roadmap.md: the scaffolding to cut,
 the Guideline 5.2 trademark exposure, the `PrivacyInfo.xcprivacy` reasons, and
 the non-code work (screenshots, privacy policy URL, export compliance).
 
+## Shipped: v0.2.7, 2026-08-17
+
+`DishWatch-0.2.7.dmg` — universal, notarized and stapled, published at
+[releases/tag/v0.2.7](https://github.com/faeton/dishwatch/releases/tag/v0.2.7).
+Notes in [release-notes-v0.2.7.md](release-notes-v0.2.7.md): the ↓↑ sparkline row
+now carries `avg ↓n ↑n` where it used to carry nothing.
+
+Both notary submissions Accepted. The DMG's sha256 verified against the download
+rather than only against `checksums.txt` — the file `curl` fetches from the
+release URL and the artifact Apple notarized are the same object:
+
+```
+a90dd8662ae3a7af823b275afb8b962cd68d3c6ee077079a002d8341fffd7889
+```
+
+Formula and cask both at 0.2.7, and `make cask` did the tap commit this time
+rather than a hand edit — the whole point of the target added after v0.2.6 left
+it at 0.2.5. The landing page went out with it (`make site`), because the panel
+replica shows the row that changed.
+
+### `make publish` failed on the changelog, and it was not our tag
+
+goreleaser's `changelog: use: github` asks GitHub to compare the two tags, and
+that call returned 404:
+
+```
+GET .../compare/v0.2.6...v0.2.7: 404 Not Found
+```
+
+Not a missing tag. `git ls-remote` showed both on the remote, and the same
+request 404s for **v0.2.5...v0.2.6** — a pair that generated a changelog fine
+when 0.2.6 shipped — and for raw SHAs. So it is the compare endpoint, not this
+release, and re-running `make publish` will not help.
+
+The release went out with the notes file as its body instead:
+
+```
+GITHUB_TOKEN=$(gh auth token) goreleaser release --clean \
+  --release-notes docs/release-notes-v0.2.7.md
+```
+
+`--release-notes` replaces the changelog step outright, so the API is never
+consulted. This is arguably where the release body belonged all along: every
+release since v0.2.0 has had a hand-written notes file in `docs/` that nobody
+reading the release page ever saw, while the page itself showed a list of commit
+subjects. If the 404 turns out to be permanent, the fix is that flag in the
+`publish` target — not switching to `use: git`, which trades the API for a
+worse-looking list of the same subjects.
+
 ## Shipped: v0.2.1, 2026-08-15
 
 `DishWatch-0.2.1.dmg` — a patch for the energy figure; notes in
