@@ -13,7 +13,8 @@ SHRINK    := -s -w
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 .PHONY: build release clean cross shrink size deps publish publish-dry helper \
-        helper-universal helper-check contract sl-lock check site site-dry
+        helper-universal helper-check contract sl-lock check site site-dry \
+        cask cask-dry
 
 # Dev build — includes debug info, fast compile.
 build:
@@ -134,6 +135,56 @@ site: site-dry
 $(SITE_WORK):
 	@mkdir -p $(dir $(SITE_WORK))
 	git clone -q $(SITE_REPO) $(SITE_WORK)
+
+# Publish packaging/dishwatch-app.rb into the tap as Casks/dishwatch-app.rb,
+# with the version and DMG sha of a release that already exists.
+#
+# This was a hand-copy step, and v0.2.6 shipped without it. Nothing failed at
+# release time; instead the tap's nightly `brew audit --cask --online --strict`
+# started failing, because livecheck resolved 0.2.6 while the cask still said
+# 0.2.5 — a daily red build for a mistake made once, days earlier.
+#
+# It cannot fold into `make publish`: goreleaser only maintains taps for
+# artifacts it built, and the DMG comes from app/Makefile via two notarization
+# round-trips. So the order is `make publish` → upload the DMG → `make cask`,
+# and the sha is read back from the release rather than from any local file, so
+# what the cask promises is what a user actually downloads.
+CASK_REPO ?= git@github.com:faeton/homebrew-tap.git
+CASK_WORK ?= $(CURDIR)/dist/tap
+# Lazy on purpose — `?=` keeps this a recursive variable, so unrelated targets
+# never pay for the API call. Override as `make cask CASK_TAG=v0.2.6`.
+CASK_TAG  ?= $(shell gh release view --json tagName --jq .tagName 2>/dev/null)
+
+# Show what would be published, changing nothing remote. Same reset-first
+# reasoning as site-dry: the checkout persists between runs.
+cask-dry: $(CASK_WORK)
+	@cd $(CASK_WORK) && git fetch -q origin && git reset -q --hard origin/main
+	@tag="$(CASK_TAG)"; \
+	  test -n "$$tag" || { echo "  ERROR: no published release found — pass CASK_TAG=vX.Y.Z" >&2; exit 1; }; \
+	  ver=$${tag#v}; dmg="DishWatch-$$ver.dmg"; \
+	  sha=$$(gh release download "$$tag" -p checksums.txt -O - | awk -v d="$$dmg" '$$2 == d {print $$1}'); \
+	  test -n "$$sha" || { echo "  ERROR: $$dmg is not in $$tag checksums.txt — is the DMG uploaded?" >&2; exit 1; }; \
+	  sed -e "s|^  version \".*\"$$|  version \"$$ver\"|" \
+	      -e "s|^  sha256 \".*\"$$|  sha256 \"$$sha\"|" \
+	      packaging/dishwatch-app.rb > $(CASK_WORK)/Casks/dishwatch-app.rb; \
+	  grep -q "^  version \"$$ver\"$$" $(CASK_WORK)/Casks/dishwatch-app.rb && \
+	  grep -q "^  sha256 \"$$sha\"$$" $(CASK_WORK)/Casks/dishwatch-app.rb || \
+	    { echo "  ERROR: packaging/dishwatch-app.rb no longer has the version/sha256 lines this rewrites" >&2; exit 1; }
+	@cd $(CASK_WORK) && if git diff --quiet; then echo "  cask already at $(CASK_TAG)"; \
+	  else git --no-pager diff -- Casks/dishwatch-app.rb; fi
+
+# The version comes back out of the rendered file rather than from a second
+# `gh release view`, so the commit message cannot disagree with what it commits.
+cask: cask-dry
+	@cd $(CASK_WORK) && if git diff --quiet; then exit 0; fi; \
+	  ver=$$(awk -F'"' '/^  version /{print $$2}' Casks/dishwatch-app.rb); \
+	  git add Casks/dishwatch-app.rb && \
+	  git commit -q -m "DishWatch app cask $$ver" && \
+	  git push -q origin main && echo "  published cask $$ver to faeton/homebrew-tap"
+
+$(CASK_WORK):
+	@mkdir -p $(dir $(CASK_WORK))
+	git clone -q $(CASK_REPO) $(CASK_WORK)
 
 clean:
 	rm -rf bin dist

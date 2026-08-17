@@ -224,7 +224,9 @@ you mean to unfold it.
 
 Releases are cut locally with [GoReleaser](https://goreleaser.com) and published
 to GitHub + the [`faeton/homebrew-tap`](https://github.com/faeton/homebrew-tap)
-repo in one step.
+repo. The CLI goes in one step; the menu-bar app's cask needs a second, because
+goreleaser can only maintain taps for artifacts it built and the notarized DMG
+is not one of them — see [docs/release.md](docs/release.md).
 
 ```sh
 # prereqs (one-time)
@@ -235,9 +237,12 @@ gh auth login                       # needs repo write scope
 git tag v0.1.2                      # bump per semver
 git push --tags
 make publish                        # builds, uploads, pushes formula
+make cask                           # pushes the app cask — only after the
+                                    # notarized DMG is uploaded
 
-# local dry-run (no push, artifacts into dist/)
+# local dry-runs (no push, artifacts into dist/)
 make publish-dry
+make cask-dry
 ```
 
 `make publish` runs `goreleaser release --clean` with `GITHUB_TOKEN=$(gh auth token)`.

@@ -1,7 +1,8 @@
-# Homebrew cask for the notarized macOS app. Copy to
-# faeton/homebrew-tap:Casks/dishwatch-app.rb at release time, with the version
-# and sha256 of the DMG actually uploaded (take the SHA from the release's
-# checksums.txt, which now includes the DMG — see .goreleaser.yaml).
+# Homebrew cask for the notarized macOS app, and the source of truth for
+# faeton/homebrew-tap:Casks/dishwatch-app.rb. Do not edit the tap's copy — run
+# `make cask` (after the DMG is uploaded), which renders this file with the
+# version and DMG sha256 read out of the published release's checksums.txt.
+# The version and sha256 below are placeholders that rendering overwrites.
 #
 # Hand-written rather than goreleaser-generated: goreleaser can only wrap
 # artifacts it built, and the DMG comes from app/Makefile with two notarization
@@ -37,7 +38,11 @@ cask "dishwatch-app" do
 
   # Matches LSMinimumSystemVersion in app/Resources/Info.plist and the
   # .macOS(.v14) platform in app/Package.swift. Keep all three in step.
-  depends_on macos: ">= :sonoma"
+  #
+  # A bare symbol already means "this version or newer" — MacOSRequirement.parse
+  # defaults to the `>=` comparator. The `">= :sonoma"` string spelling is the
+  # deprecated form and warns.
+  depends_on macos: :sonoma
 
   app "DishWatch.app"
 
@@ -52,7 +57,7 @@ cask "dishwatch-app" do
   # Sandboxed, so all state lives in the container. ~/.cache/sl belongs to the
   # CLI formula and must not be zapped here.
   zap trash: [
-    "~/Library/Containers/com.faeton.dishwatch",
     "~/Library/Application Scripts/com.faeton.dishwatch",
+    "~/Library/Containers/com.faeton.dishwatch",
   ]
 end

@@ -58,9 +58,27 @@ goreleaser v3 removes the key, not merely "eventually".
 
 ## The app cask
 
-`packaging/dishwatch-app.rb` is copied into the tap at release time with the
-version and the SHA of the uploaded DMG (now in `checksums.txt`). This is a
-manual release step — goreleaser only maintains taps for artifacts it built.
+`packaging/dishwatch-app.rb` is the source of truth; `make cask` renders it into
+the tap with the version and the SHA of the uploaded DMG, both read back out of
+the published release's `checksums.txt`. Run it after the DMG is uploaded:
+
+```
+make publish          # goreleaser: CLI archives + Formula/dishwatch.rb
+                      # …then upload the notarized DMG (see "The app, direct")
+make cask-dry         # show the tap diff, change nothing
+make cask             # commit and push Casks/dishwatch-app.rb
+```
+
+It is a step of its own rather than part of `make publish` because goreleaser
+only maintains taps for artifacts it built, and the DMG is not one of them — it
+comes from `app/Makefile` and does not exist yet when goreleaser runs.
+
+Skipping it does not fail the release. It fails the tap's *nightly* audit
+instead: `brew audit --cask --online --strict` resolves the latest tag through
+livecheck and rejects any cask that disagrees. v0.2.6 shipped with the cask left
+at 0.2.5 and turned every subsequent scheduled run red, days after the mistake.
+Never hand-edit the tap's copy — `make cask` overwrites it wholesale, so an edit
+made only there is reverted by the next release and lost.
 
 The token is `dishwatch-app`, not `dishwatch`. A tap may hold a formula and a
 cask under the same token, but Homebrew resolves the collision by preferring the
