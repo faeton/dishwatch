@@ -12,7 +12,7 @@ SHRINK    := -s -w
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
-.PHONY: build release clean cross shrink size deps publish publish-dry helper \
+.PHONY: build release clean cross shrink size deps publish publish-release publish-dry helper \
         helper-universal helper-check contract sl-lock uptime-parity sl-render check site site-dry \
         cask cask-dry
 
@@ -106,7 +106,36 @@ deps:
 # Cut a release: tag, then `make publish`. Example:
 #   git tag v0.1.0 && git push --tags && make publish
 # Requires: goreleaser, gh auth (for pushing to homebrew-tap).
+#
+# Both halves of the tap, in the only order that works.
+#
+# The tap carries two files for this project: Formula/dishwatch.rb, which
+# goreleaser maintains, and Casks/dishwatch-app.rb, which it knows nothing
+# about. Publishing only the first leaves the cask declaring the previous
+# version, and the tap's nightly `brew audit --cask --online --strict` compares
+# it against livecheck and fails — so the cost of forgetting is a daily red
+# build in a DIFFERENT repository, starting hours after the release looked
+# like it went fine.
+#
+# That is not hypothetical and not a one-off: it happened at v0.2.6, was
+# written up in the `cask` comment below as a warning, and then happened again
+# at v0.2.8 — by someone who had read that warning. A step that has now been
+# forgotten twice is not a discipline problem, it is a missing dependency.
+#
+# The old note below says this "cannot fold into `make publish`" because the
+# DMG had to be uploaded by hand in between. That stopped being true when the
+# DMG moved into goreleaser's `extra_files` (see .goreleaser.yaml): `publish`
+# now uploads it itself, so there is nothing left to do between the two halves.
+#
+# Recursive $(MAKE) rather than prerequisites, for ordering: the cask reads the
+# DMG's sha256 back out of the PUBLISHED release, so it cannot even be computed
+# until goreleaser has uploaded it. Prerequisites would be free to run in either
+# order under `make -j`.
 publish:
+	$(MAKE) publish-release
+	$(MAKE) cask
+
+publish-release:
 	@command -v goreleaser >/dev/null || { echo "goreleaser not installed — brew install goreleaser" >&2; exit 1; }
 	GITHUB_TOKEN=$$(gh auth token) goreleaser release --clean
 
@@ -154,10 +183,15 @@ $(SITE_WORK):
 # started failing, because livecheck resolved 0.2.6 while the cask still said
 # 0.2.5 — a daily red build for a mistake made once, days earlier.
 #
-# It cannot fold into `make publish`: goreleaser only maintains taps for
-# artifacts it built, and the DMG comes from app/Makefile via two notarization
-# round-trips. So the order is `make publish` → upload the DMG → `make cask`,
-# and the sha is read back from the release rather than from any local file, so
+# `make publish` runs this for you now — see the note there. It did not always:
+# goreleaser only maintains taps for artifacts it built, and the DMG comes from
+# app/Makefile via two notarization round-trips, so uploading it was once a
+# manual step in between. `extra_files` in .goreleaser.yaml closed that gap.
+#
+# Still worth running on its own when a cask-only change (a caveat, a zap
+# stanza) needs publishing without cutting a release.
+#
+# The sha is read back from the release rather than from any local file, so
 # what the cask promises is what a user actually downloads.
 CASK_REPO ?= git@github.com:faeton/homebrew-tap.git
 CASK_WORK ?= $(CURDIR)/dist/tap

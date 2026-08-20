@@ -236,20 +236,35 @@ gh auth login                       # needs repo write scope
 # cut a release
 git tag v0.1.2                      # bump per semver
 git push --tags
-make publish                        # builds, uploads, pushes formula
-make cask                           # pushes the app cask — only after the
-                                    # notarized DMG is uploaded
+
+# 1. the notarized universal DMG, which the release embeds. Not optional:
+#    goreleaser attaches it via extra_files and fails if it is missing.
+cd app && make notarize CODESIGN_ID="Developer ID Application: ... (TEAMID)" UNIVERSAL=1 && cd ..
+
+# 2. everything else — tarballs, the GitHub Release, the DMG, AND both tap
+#    files (Formula/dishwatch.rb via goreleaser, Casks/dishwatch-app.rb via
+#    the `cask` target it now calls for you).
+make publish
 
 # local dry-runs (no push, artifacts into dist/)
 make publish-dry
 make cask-dry
 ```
 
-`make publish` runs `goreleaser release --clean` with `GITHUB_TOKEN=$(gh auth token)`.
-It builds darwin/linux × amd64/arm64 (~5 MB gzipped each), uploads tarballs to a
-new GitHub Release on `faeton/dishwatch`, and commits an updated
-`Formula/dishwatch.rb` to `faeton/homebrew-tap` so `brew install dishwatch` picks
-up the new version after `brew update`.
+`make publish` runs `goreleaser release --clean` with `GITHUB_TOKEN=$(gh auth token)`,
+then `make cask`. goreleaser builds darwin/linux × amd64/arm64 (~5 MB gzipped
+each), uploads tarballs and the DMG to a new GitHub Release on
+`faeton/dishwatch`, and commits an updated `Formula/dishwatch.rb` to
+`faeton/homebrew-tap` so `brew install dishwatch` picks up the new version after
+`brew update`.
+
+The `cask` half is not cosmetic. goreleaser maintains the formula but knows
+nothing about `Casks/dishwatch-app.rb`, which is how the app is delivered — and
+the tap's nightly `brew audit --cask --online --strict` compares that cask
+against livecheck, so a release that updates only the formula turns a different
+repository red every night until someone notices. That was missed at v0.2.6 and
+again at v0.2.8, which is why the two are one command now. Run `make cask` alone
+only for a cask-only change that is not tied to a release.
 
 Config lives in `.goreleaser.yaml`. To change what's shipped (add a build target,
 tweak the description, etc.) edit that file and re-run `make publish-dry` to
