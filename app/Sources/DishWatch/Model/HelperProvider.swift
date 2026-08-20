@@ -46,11 +46,36 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
         /// Whether restarting the child could plausibly help. A helper that is
         /// missing, or that speaks a protocol this build does not know, will
         /// fail identically forever — respawning it is just process churn.
+        ///
+        /// Consulted only for errors that are *not* `isApplicationError`; a
+        /// reply is never a reason to restart anything, whatever it says.
         var isTransient: Bool {
             switch self {
             case .notFound, .protocolMismatch: return false
             default:                           return true
             }
+        }
+
+        /// Whether this is the helper **answering** rather than the channel
+        /// failing.
+        ///
+        /// `.remote` is a completed exchange: the id correlated, the JSON
+        /// parsed, and the helper deliberately set `ok:false` to report
+        /// something about the dish or the request. Every other case here is a
+        /// broken pipe, a deadline, or a desynchronised stream.
+        ///
+        /// The distinction is load-bearing, and its absence was a live defect.
+        /// `.remote` fell into the generic catch, which tore down a perfectly
+        /// healthy child and respawned it. `helper.go` returns application
+        /// errors *by design* for the class of failure that repeats — firmware
+        /// that renames a field, a dish that answers but cannot be decoded — so
+        /// the steady state was one teardown and one fork per poll, at up to
+        /// 1 Hz, indefinitely. Restarting cannot change the answer; it only
+        /// destroys the connection that produced it and hides the reason behind
+        /// process churn.
+        var isApplicationError: Bool {
+            if case .remote = self { return true }
+            return false
         }
     }
 
@@ -215,6 +240,17 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
             let r = try send(body)
             noteSuccess()
             return r
+        } catch let error as HelperError where error.isApplicationError {
+            // The helper answered. Hand the answer to the caller and leave the
+            // child alone — see `isApplicationError` for the restart storm this
+            // clause exists to stop.
+            //
+            // Counted as a success because that is what it is at this layer:
+            // the process is alive, the framing held, and a correlated reply
+            // came back inside its deadline. Letting it accumulate failures
+            // instead would arm the backoff against a helper that is working.
+            noteSuccess()
+            throw error
         } catch let error as HelperError where !error.isTransient {
             // Missing binary or protocol mismatch: respawning cannot fix it, so
             // do not retry within this request. It still has to count as a
@@ -236,10 +272,37 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
             consecutiveFailures += 1
             lastFailure = error
             shutdown()
-            guard retry, consecutiveFailures <= 3 else { throw error }
-            let r = try send(body)
-            noteSuccess()
-            return r
+            guard retry, consecutiveFailures <= 3 else {
+                // Out of retries. This is the one path that used to leave the
+                // backoff unarmed: `shutdown()` deliberately does not schedule
+                // one (see its note), and nothing else here did either, so
+                // `nextLaunchNoEarlierThan` stayed nil and the *next* poll
+                // called ensureRunning and forked immediately. Past the
+                // threshold that is a fork per poll — the same storm the
+                // backoff was written to prevent, reached by a different door.
+                scheduleBackoff()
+                throw error
+            }
+            do {
+                let r = try send(body)
+                noteSuccess()
+                return r
+            } catch let retryError as HelperError where retryError.isApplicationError {
+                // A fresh child that answers has fixed the channel; the answer
+                // itself is the caller's problem, not a reason to keep killing
+                // processes.
+                noteSuccess()
+                throw retryError
+            } catch {
+                // The retry failed on a child launched seconds ago, so this is
+                // not a stale connection — arm the backoff before the next poll
+                // asks for another one.
+                consecutiveFailures += 1
+                lastFailure = error
+                shutdown()
+                scheduleBackoff()
+                throw error
+            }
         }
     }
 

@@ -4,8 +4,12 @@ import Foundation
 /// This reuses the CLI's gRPC client, energy integrator, and power-bank state,
 /// so the app reflects exactly what `sl`/`dishwatch` sees (incl. pb disabled).
 ///
-/// (The App Store build will replace this with an in-process c-archive call —
-/// see docs/roadmap.md — but shelling out gives real data today.)
+/// **Not the shipping path, and it cannot be.** A sandboxed bundle cannot reach
+/// a Homebrew or checkout install at all, so this spawn-per-poll bridge has no
+/// binary to find in a Store build; `HelperProvider` and its embedded helper
+/// replaced it (docs/roadmap.md, Option C). This comment used to promise an
+/// in-process c-archive instead, which is Option A — considered and rejected.
+/// Kept as a development convenience for running against an installed CLI.
 final class LiveProvider: DishProvider, @unchecked Sendable {
     enum LiveError: LocalizedError {
         case binaryNotFound

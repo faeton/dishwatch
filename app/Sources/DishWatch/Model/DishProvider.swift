@@ -1,11 +1,18 @@
 import Foundation
 
 /// Source of dish snapshots. The sample provider feeds the design's numbers so
-/// the app runs anywhere; a future `LiveProvider` will call the Go core
-/// (dishkit c-archive) behind this same protocol — see docs/roadmap.md.
+/// the app runs anywhere; `HelperProvider` supplies real ones from the embedded
+/// `dishwatch helper` — see docs/roadmap.md.
 ///
-/// `async throws` so the live provider can do off-main-actor cgo/network work
-/// and surface failures (which `AppState` maps to an offline snapshot).
+/// This said "a future `LiveProvider` will call the Go core (dishkit
+/// c-archive)". That was Option A, and the 2026-08-05 spike settled on Option C
+/// instead: no cgo anywhere, the Go core supervised as a child process. The
+/// seam is unchanged and was the point of having one — but a comment naming the
+/// rejected architecture is the first thing a reader trusts and the last thing
+/// anyone updates.
+///
+/// `async throws` so the live provider can do off-main-actor work and surface
+/// failures (which `AppState` maps to an offline snapshot).
 ///
 /// `window` is how many seconds of sparkline history to fetch (60–900, off the
 /// dish's own ring). It is a per-poll argument rather than provider state
