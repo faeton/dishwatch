@@ -303,6 +303,55 @@ screen answered it, and the CLI did not either.
   alike, since they differ in size rather than in shape. The generation is
   written beside it in words rather than mimed in geometry.
 
+### Azimuth and elevation are an aim, not a position
+
+- **The pair reads as a coordinate, and readers say so.** Two angles in degrees,
+  stacked directly above a GPS row, is a coordinate's exact shape. Nothing on
+  this wire carries position: `get_status` reports only `gpsValid` and `gpsSats`,
+  and the coordinates live behind a separate `get_location` the dish refuses
+  unless location access is enabled in the Starlink app.
+- **`SkyPlot` is the fix; the sentence is the backstop.** A dot inside a compass
+  ring is obviously a direction and cannot be misread as a coordinate. The
+  explanation below it exists to deny the reading outright, because a picture
+  cannot state a negative.
+- **Elevation runs zenith-to-rim, not rim-to-zenith.** A dish doing its job
+  points steeply up, so the common case parks near the centre and a low or
+  awkward aim falls visibly outward. The inverse projection would put every
+  healthy dish on the edge.
+- **"Bearing", not "Azimuth", in the detail row**, and normalized to 0..<360.
+  The dish reports −180…180; a leading minus on a direction is half the
+  confusion on its own. The compass point (16 of them, so the label never
+  disagrees with the degrees by more than 11°) is what turns the number into a
+  fact — in the expanded row, where there is room, not in the one-line strip.
+- **No drawn beamwidth.** The dish does not report one, so any cone angle would
+  be invented. The marker is a dot with a soft halo: "roughly here", claiming no
+  width.
+
+### The country is a reading, not a location
+
+- **Flag *and* code, never the flag alone.** Flags are the one glyph on the
+  panel a reader can genuinely fail to resolve: they render at text size,
+  several are two colours apart from a neighbour, and a handful of regions have
+  no glyph on macOS and fall back to bare letters anyway. Two letters beside it
+  costs a few points of a column with room to spare.
+- **Only two ASCII letters compose a flag.** The wire field is a free string, so
+  `""` and any longer token firmware might send map to nothing. Unguarded, they
+  become a run of loose regional-indicator glyphs — or worse, pair silently into
+  the flag of a country nobody is in.
+- **The name is looked up only for codes Foundation carries.**
+  `localizedString(forRegionCode:)` does not answer nil for an unassigned code;
+  it answers the localized placeholder, so `ZZ` came back as `Unknown Region`
+  and the tooltip named a country that does not exist. Ask `Locale.Region`'s ISO
+  list first, and fall back to the bare code.
+- **The tooltip's job is the disclaimer.** Every other way an app shows you a
+  country — IP geolocation, a GPS fix — answers *where are you*. This one
+  answers *what does the terminal believe it is licensed under*, which can
+  differ while a dish is moving and can differ from where the traffic exits at
+  any time. Same shape as the billing caveat on the service line.
+- **It shares the uptime line.** It is the same kind of reading as the two
+  beside it — small, current, true only of this boot — and the identity lines
+  below are strings you copy, not ones you glance at.
+
 ### Scrubbing a sparkline
 
 Press and drag along any trace: a rule marks the column, a dot lands on each
@@ -345,6 +394,10 @@ useless — so the mean is the headline and the worst second is detail.
 | Power spark trailing | `avg %.1f W` |
 | Any spark trailing, while that row is scrubbed | the sample under the pointer in the row's unit: `31 ms`, `23.4 W`, `↓143 ↑14` — each throughput figure in its trace's colour |
 | Power grid sub-label | `%.1f W session` |
+| Hero session line | `up %@ · boots %d` — plus ` · 🇬🇱 GL` when the dish named a country, and nothing at all when it did not |
+| Country line in the detail row | `Country` / `🇬🇱 GL`, followed by `%@ (%@) — the country the dish reports for itself. It is the terminal's own reading, not a lookup of your IP address and not derived from GPS, so it need not match where your traffic leaves the network.` — **on screen, not a tooltip**; it shipped as a `.help()` for one afternoon, which this document had already ruled out |
+| Detail row, aim | `Bearing` / `%d° · %@`, `Elevation` / `%d° above horizon`, beside a `SkyPlot` |
+| Detail row, aim explanation | `Where the dish is pointing its beam, not where it is. Azimuth is the compass bearing and elevation is the angle above the horizon; neither is a coordinate — the dish reports only that GPS has a fix, never the position itself.` |
 | Session footer | `Observed %@ · ping %d · %d%% clean · peak ↓%d ↑%d · %.1f W` |
 | Session footer, second line when outages > 0 | `%d outages · %@ dark · longest %@` |
 | Footer, cold start (< 2 min observed) | *hide the row entirely — never show zeros as statistics* |
@@ -414,6 +467,7 @@ collected, which is the app's cue to hide the footer.
 | `seriesSeconds` | samples the sparkline series actually carry — **not** the window requested; see the reversal note under *Windows* |
 | `hardwareShort` | model with its generation — `Standard Gen2`, `Mini`, or the raw string when unplaceable |
 | `hardwareAim` | `motorized`, `manual`, or `""` — inferred from the model, since the dish will not say; `""` renders as nothing |
+| `countryCode` | ISO 3166-1 alpha-2 from `deviceInfo.countryCode`, passed through unaltered. `""` whenever the dish did not say — firmware that omits it, and every offline snapshot — and the panel draws nothing rather than filling the gap from coordinates it never asks for |
 | `metered` | `true` when the dish reports `treatAsMetered`. The wire omits the field when false, so `false` also means "firmware too old to say" — the panel may state that a link **is** capped, never that one is not. The dish never reports how much allowance remains, so no view may imply a budget |
 | `serviceDisable` | why service stopped, normalized off `UtDisablementCode` — `inOcean`, `roamRestricted`, `dataOverage`, `movingTooFast`, `noAccount`, … or `""`. Present exactly when `state` is `Disabled`; it says the thing `state` cannot, since a dish blocked over open ocean and one blocked for an unpaid bill read identically without it. An unrecognized code maps to `""`: the outage still shows, only its reason goes unstated |
 | `obsSeconds` | samples actually integrated this boot |

@@ -47,6 +47,20 @@ type Dashboard struct {
 	HardwareAim string `json:"hardwareAim"`
 	DeviceID    string `json:"deviceId"`
 	Firmware    string `json:"firmware"`
+	// Where the dish says it is: the ISO 3166-1 alpha-2 code carried in
+	// `deviceInfo.countryCode`.
+	//
+	// The dish's own report, passed through unaltered. DishWatch does not
+	// derive it — not from the public IP, and not from the coordinates, which
+	// buildDashboard deliberately never asks for (see below). A dish in motion
+	// therefore reports what it is currently licensed to operate under, which
+	// is not always the ground underneath it.
+	//
+	// Empty is a real case and means "the dish did not say": firmware that
+	// leaves the field unset arrives as "" because we unmarshal with
+	// EmitUnpopulated:false, and every offline snapshot carries "" too.
+	// Surfaces must draw nothing rather than fill the gap with a guess.
+	CountryCode string `json:"countryCode"`
 	// What the dish is provisioned for, normalized out of `classOfService` and
 	// `mobilityClass`. Tokens, not prose — the app has its own wording, the same
 	// split HardwareAim uses.
@@ -294,6 +308,7 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 		HardwareAim:     classifyHardware(s.DeviceInfo.HardwareVersion).Aim,
 		DeviceID:        deviceID(s),
 		Firmware:        trimFirmware(s.DeviceInfo.SoftwareVersion),
+		CountryCode:     s.DeviceInfo.CountryCode,
 		ServiceClass:    serviceClass(s.ClassOfService),
 		ServiceMobility: serviceMobility(s.MobilityClass),
 		Metered:         s.TreatAsMetered,

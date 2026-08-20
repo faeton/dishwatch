@@ -138,13 +138,7 @@ struct SettingsView: View {
     ///
     /// The fallback keeps that conservatism for the case where the pointer is
     /// on no screen at all.
-    private static var hostScreenHeight: CGFloat {
-        let mouse = NSEvent.mouseLocation
-        if let s = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
-            return s.visibleFrame.height
-        }
-        return NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
-    }
+    private static var hostScreenHeight: CGFloat { PanelMetrics.hostScreenHeight }
 
     /// Back bar — the only way out of in-panel settings.
     private var header: some View {
@@ -219,7 +213,10 @@ enum SettingsPanelProbe {
 /// Carries the settings list's laid-out height up to the view that sizes the
 /// panel. `max` rather than "last one wins" so a stray zero from a view still
 /// being laid out cannot collapse the panel.
-private struct ContentHeightKey: PreferenceKey {
+/// Measured height of a panel's laid-out content. Shared: both the status
+/// popover and settings cap themselves against the screen, and a second copy
+/// of this would be a second thing to keep in step.
+struct ContentHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())

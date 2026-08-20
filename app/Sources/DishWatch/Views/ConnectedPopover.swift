@@ -185,9 +185,32 @@ struct ConnectedPopover: View {
                     HardwareChip(model: d.hardwareShort, aim: d.hardwareAim)
                         .padding(.top, 9)
                 }
-                Text("up \(Self.uptime(d.uptimeSeconds)) · boots \(d.boots)")
-                    .font(.system(size: 12.5)).monospacedDigit().foregroundStyle(DW.textA(0.55))
-                    .padding(.top, 8)
+                // Session facts, and where the dish thinks it is sitting while
+                // it has them. The country shares this line rather than taking
+                // one of its own because it is the same kind of reading as the
+                // two beside it — small, current, and true only of this boot —
+                // and because the identity lines below are strings you copy,
+                // not ones you glance at.
+                //
+                // Baseline-aligned, not centre-aligned: the flag is a colour
+                // emoji with its own metrics, and centring would float it a
+                // point above the digits it sits next to.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("up \(Self.uptime(d.uptimeSeconds)) · boots \(d.boots)")
+                        .font(.system(size: 12.5)).monospacedDigit().foregroundStyle(DW.textA(0.55))
+                    // Silent unless the dish named a country — see
+                    // `countryBadge`. An offline snapshot has none, and this is
+                    // not a fact worth inventing from coordinates the panel
+                    // never asks for.
+                    if let badge = d.countryBadge {
+                        // No `.help` here. The explanation lives in the detail
+                        // row, where it can actually be read — a tooltip in a
+                        // non-activating panel is a fact nobody receives.
+                        Text("· \(badge)")
+                            .font(.system(size: 12.5)).foregroundStyle(DW.textA(0.55))
+                    }
+                }
+                .padding(.top, 8)
                 // Two lines, both whole. A real dish reports a 28-character ID
                 // and a 20-character firmware string, and `%@ · fw %@` cannot
                 // hold them: it truncated to `…-00ed07ca · fw 2026.0…`, cutting
@@ -198,11 +221,17 @@ struct ConnectedPopover: View {
                 Text(d.deviceId)
                     .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.38))
                     .lineLimit(1).minimumScaleFactor(0.8)
+                    // Width-only, as on the spark trailing — see the note
+                    // there. Vertical pressure must not buy font size.
+                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .padding(.top, 3)
                 Text("fw \(d.firmware)")
                     .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.38))
                     .lineLimit(1).minimumScaleFactor(0.8)
+                    // Width-only, as on the spark trailing — see the note
+                    // there. Vertical pressure must not buy font size.
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 1)
                 // What the dish is provisioned for — a static fact about this
                 // unit, so it belongs with the ID and the firmware rather than
@@ -221,6 +250,9 @@ struct ConnectedPopover: View {
                     Text(service)
                         .font(.system(size: 11.5)).foregroundStyle(DW.textA(0.5))
                         .lineLimit(1).minimumScaleFactor(0.8)
+                    // Width-only, as on the spark trailing — see the note
+                    // there. Vertical pressure must not buy font size.
+                    .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 3)
                 }
             }
@@ -688,6 +720,15 @@ struct ConnectedPopover: View {
             trailing(row, drawn, span: span)
                 .font(.system(size: 11)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.8)
+                // `minimumScaleFactor` here is about *width* — the ↓↑ row
+                // carries two figures in the same 82 pt as the others carry
+                // one. It answers to height as well, and that was a bug you
+                // could watch happen: squeeze the panel vertically and these
+                // three figures gave up font size while every other label held,
+                // so opening the detail row visibly shrank the word "avg" and
+                // nothing else. Pinning the vertical size keeps the modifier
+                // doing the job it was added for and no other.
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(DW.textA(0.45))
                 .frame(width: 82, alignment: .trailing)
         }
@@ -823,7 +864,10 @@ struct ConnectedPopover: View {
                         // same verb over a pair of live angles reads as an
                         // instruction to go set them, or as motors moving to
                         // them right now. One word, two facts, in one panel.
-                        Text("◎ Pointing \(Int(d.azimuthDeg))° / \(Int(d.elevationDeg))°")
+                        // Normalised here too. The dish reports azimuth as
+                        // −180…180, and a leading minus on a compass bearing is
+                        // the first half of the coordinate misreading.
+                        Text("◎ Pointing \(Int(aimBearing.rounded()))° / \(Int(d.elevationDeg))°")
                         Text("⌖ GPS \(d.gpsValid ? "✓" : "✗") \(d.gpsSats)")
                         Text("⎈ \(d.ethMbps) Mbps")
                     }
@@ -838,10 +882,30 @@ struct ConnectedPopover: View {
 
             if detailExpanded {
                 VStack(alignment: .leading, spacing: 6) {
-                    detailLine("Azimuth", "\(Int(d.azimuthDeg))°")
-                    detailLine("Elevation", "\(Int(d.elevationDeg))°")
-                    detailLine("GPS", "\(d.gpsValid ? "lock" : "no fix") · \(d.gpsSats) sats")
-                    detailLine("Ethernet", "\(d.ethMbps) Mbps")
+                    // The plot sits beside the angles it draws, not under
+                    // them. The confusion being fixed is that azimuth and
+                    // elevation read as a coordinate when stacked above a GPS
+                    // row; putting a compass ring in the same glance is what
+                    // breaks that reading, and it only works if both are on
+                    // screen together.
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            // "Bearing", not "Azimuth". Same number, and the
+                            // one word a reader already knows means direction.
+                            detailLine("Bearing", aimBearingText)
+                            detailLine("Elevation", "\(Int(d.elevationDeg))° above horizon")
+                            detailLine("GPS", "\(d.gpsValid ? "lock" : "no fix") · \(d.gpsSats) sats")
+                            detailLine("Ethernet", "\(d.ethMbps) Mbps")
+                        }
+                        SkyPlot(azimuthDeg: d.azimuthDeg, elevationDeg: d.elevationDeg, size: 92)
+                    }
+                    Text(d.aimExplanation)
+                        .font(.system(size: 11))
+                        .foregroundStyle(DW.textA(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
+                    countryDetail
                     serviceDetail
                 }
                 .padding(.top, 10)
@@ -851,6 +915,43 @@ struct ConnectedPopover: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+    }
+
+    /// The dish's azimuth as a compass bearing, 0..<360.
+    ///
+    /// `-176°` is the dish's own convention (−180…180). A leading minus on
+    /// something labelled as a direction is the first half of the coordinate
+    /// misreading this block exists to close.
+    private var aimBearing: Double {
+        let b = d.azimuthDeg.truncatingRemainder(dividingBy: 360)
+        return b < 0 ? b + 360 : b
+    }
+
+    /// Bearing as a figure and a named direction: `184° · S`.
+    ///
+    /// The compass point is what turns a number into a fact, but it earns its
+    /// space only where there is room to read it — the expanded row, not the
+    /// one-line strip, which already carries two other readings.
+    private var aimBearingText: String {
+        "\(Int(aimBearing.rounded()))° · \(DishData.compassPoint(aimBearing))"
+    }
+
+    /// The country badge again, with the sentence that says what it is not.
+    ///
+    /// Same reason `serviceDetail` exists and the same place, because it is the
+    /// same kind of claim: a fact the dish reports about itself that reads like
+    /// a fact about you. This was a `.help()` for one afternoon, which docs
+    /// /macos-ui.md had already explained cannot work in this panel.
+    @ViewBuilder private var countryDetail: some View {
+        if let badge = d.countryBadge {
+            Divider().background(DW.hairline).padding(.vertical, 2)
+            detailLine("Country", badge)
+            Text(d.countryHelp)
+                .font(.system(size: 11))
+                .foregroundStyle(DW.textA(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// The service class again, this time with the sentence that says what it

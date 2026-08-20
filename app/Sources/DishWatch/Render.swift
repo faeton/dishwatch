@@ -68,6 +68,9 @@ enum Render {
         long.firmware = "2026.04.07.mr77639.1"
         long.boots = 1326
         long.uptimeHours = 0.7
+        // The uptime line's widest form: a four-digit boot count and a country
+        // badge, which is the pair that has to fit beside the signal gauge.
+        long.countryCode = "GB"
         // The widest service reading there is: `Business Plus · cleared to use
         // in motion` shares the identity column with the ID and the firmware,
         // and is longer than either.

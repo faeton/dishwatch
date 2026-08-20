@@ -210,6 +210,13 @@ struct DishData: Decodable, Sendable, Equatable {
     var hardwareAim: DishAim = .unknown
     var deviceId: String = ""
     var firmware: String = ""
+    /// ISO 3166-1 alpha-2 code the dish reports for itself (`countryCode` on
+    /// the wire), verbatim and uninterpreted.
+    ///
+    /// "" is the ordinary "did not say" case — firmware that omits the field,
+    /// and every offline snapshot — and it is why nothing here forces a
+    /// two-letter shape. See `countryBadge` for what survives to the panel.
+    var countryCode: String = ""
     var serviceClass: ServiceClass = .unknown
     var serviceMobility: ServiceMobility = .unknown
     /// Whether the dish reports the link as capped. `false` is also "firmware
@@ -284,6 +291,121 @@ struct DishData: Decodable, Sendable, Equatable {
     var anchoredAgoText: String = ""
 
     var stateLabel: String { state.rawValue }
+
+    /// The reported country, as a flag and its code — "🇬🇱 GL" — for the line
+    /// under the hardware chip. `nil` when there is nothing honest to draw.
+    ///
+    /// The code rides along with the flag rather than being replaced by it.
+    /// Flags are the one glyph on this panel a reader can genuinely fail to
+    /// resolve: they render at text size, several are two colours apart from a
+    /// neighbour, and a handful of regions have no flag glyph at all on macOS
+    /// and fall back to the bare letters anyway. Two letters beside it costs a
+    /// few points of a column with room to spare and makes the reading
+    /// unambiguous for everyone, which a 12.5 pt tricolour does not.
+    var countryBadge: String? {
+        guard let flag = DishData.flag(for: countryCode) else { return nil }
+        return "\(flag) \(countryCode.uppercased())"
+    }
+
+    /// What that badge means, for the detail row.
+    ///
+    /// The disclaimer is the point, and it is the same shape as the one
+    /// `serviceExplanation` carries: this is the dish's own report about
+    /// itself, and people will reasonably assume otherwise. Every other way an
+    /// app shows you a country — an IP geolocation, a GPS fix — answers "where
+    /// are you", and this one answers "what does the terminal believe it is
+    /// licensed under", which can differ while a dish is moving and can differ
+    /// from the exit country of your traffic at any time.
+    ///
+    /// **On screen, not in a `.help`.** This shipped as a tooltip first, which
+    /// made it the exact mistake docs/macos-ui.md records under *Tooltips are
+    /// not a place to put information*: `.help()` does not reliably fire inside
+    /// a non-activating `MenuBarExtra(.window)` panel, so a carefully written
+    /// caveat was invisible to every user. A disclaimer nobody can read is
+    /// worse than none, because the bare flag still makes its claim.
+    ///
+    /// Only read when `countryBadge` is non-nil, so it may assume a code.
+    var countryHelp: String {
+        let code = countryCode.uppercased()
+        let named = DishData.regionName(code).map { "\($0) (\(code))" } ?? code
+        return "\(named) — the country the dish reports for itself. It is the terminal's own reading, not a lookup of your IP address and not derived from GPS, so it need not match where your traffic leaves the network."
+    }
+
+    /// The localized country name for a code, or `nil` for one Foundation does
+    /// not recognise.
+    ///
+    /// The membership check is the whole point of this existing.
+    /// `localizedString(forRegionCode:)` does not answer nil for an unassigned
+    /// code — it answers the localized placeholder, so "ZZ" came back as
+    /// "Unknown Region" and the tooltip read "Unknown Region (ZZ) — the country
+    /// the dish reports for itself", naming a country that does not exist. Ask
+    /// the ISO list first and the fallback is the bare code, which at least
+    /// says only what we know.
+    static func regionName(_ code: String) -> String? {
+        guard isoRegionCodes.contains(code) else { return nil }
+        return Locale.current.localizedString(forRegionCode: code)
+    }
+
+    /// Cached: `Locale.Region.isoRegions` builds ~290 values on every access,
+    /// and this is read from a tooltip on a panel that redraws per poll.
+    private static let isoRegionCodes: Set<String> =
+        Set(Locale.Region.isoRegions.map(\.identifier))
+
+    /// What the two aim angles are, and — the load-bearing half — what they
+    /// are not.
+    ///
+    /// They sit one row above a GPS line, in degrees, as a pair. That is a
+    /// coordinate's exact shape, and readers have said so unprompted. Nothing
+    /// on this wire carries the dish's position: `get_status` reports only
+    /// whether GPS has a fix and how many satellites it can see, and the
+    /// coordinates live behind a separate `get_location` call the dish refuses
+    /// unless location access is enabled in the Starlink app.
+    ///
+    /// So the sentence has to do two jobs: say what the angles describe, and
+    /// close off the reading it invites. `SkyPlot` does the first job better
+    /// than any wording; this is mostly here for the second.
+    var aimExplanation: String {
+        "Where the dish is pointing its beam, not where it is. Azimuth is the compass bearing and elevation is the angle above the horizon; neither is a coordinate — the dish reports only that GPS has a fix, never the position itself."
+    }
+
+    /// The compass point for a bearing — "N", "SSW" — or "" for a bearing that
+    /// is not a number.
+    ///
+    /// Sixteen points rather than eight: eight puts 22° of slop on a label
+    /// beside a figure quoted to the degree, and the two disagreeing on screen
+    /// reads as a bug. It exists to make the number legible as a *direction*,
+    /// which is the whole confusion being fixed.
+    static func compassPoint(_ degrees: Double) -> String {
+        guard degrees.isFinite else { return "" }
+        let points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                      "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+        var b = degrees.truncatingRemainder(dividingBy: 360)
+        if b < 0 { b += 360 }
+        let i = Int((b / 22.5).rounded()) % points.count
+        return points[i]
+    }
+
+    /// The regional-indicator flag for a two-letter country code, or `nil`.
+    ///
+    /// Unicode composes flags from pairs of regional indicator symbols, one per
+    /// letter, at a fixed offset from ASCII 'A'. The guard is not defensive
+    /// tidiness: the wire field is a free string, so "" and any longer token
+    /// firmware might put there ("UNKNOWN") would otherwise map to a run of
+    /// stray indicator glyphs — which macOS renders as loose letters in boxes,
+    /// or worse, silently pairs into the flag of a country nobody is in.
+    static func flag(for code: String) -> String? {
+        let letters = Array(code.uppercased().unicodeScalars)
+        guard letters.count == 2,
+              letters.allSatisfy({ $0.value >= 65 && $0.value <= 90 }) else { return nil }
+        var out = ""
+        for l in letters {
+            // 0x1F1E6 is REGIONAL INDICATOR SYMBOL LETTER A; the range is
+            // contiguous through Z, so the offset from 'A' carries across.
+            guard let scalar = Unicode.Scalar(l.value + (0x1F1E6 - 65)) else { return nil }
+            out.unicodeScalars.append(scalar)
+        }
+        return out
+    }
 
     /// The identity block's service reading: the class, then what the dish is
     /// cleared to do under it.
@@ -476,6 +598,10 @@ extension DishData {
         d.hardwareAim = .manual
         d.deviceId = "mini1_panda"
         d.firmware = "2026.04.07"
+        // Not in the mockup, which predates the field. Present here anyway so
+        // the render harness exercises the badge — a sample that omits it
+        // screenshots the one layout the code no longer takes.
+        d.countryCode = "US"
         d.serviceClass = .consumer
         d.serviceMobility = .mobile
         d.downMbps = 142.5
@@ -536,6 +662,7 @@ extension DishData {
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case state, signalScore, uptimeHours, boots, hardwareShort, hardwareAim, deviceId, firmware
+        case countryCode
         case serviceClass, serviceMobility, metered, serviceDisable
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
@@ -583,6 +710,7 @@ extension DishData {
         d.hardwareAim = s(.hardwareAim, d.hardwareAim)
         d.deviceId = s(.deviceId, d.deviceId)
         d.firmware = s(.firmware, d.firmware)
+        d.countryCode = s(.countryCode, d.countryCode)
         // Lenient for the same reason `hardwareAim` is: a class or mobility
         // value this build has never heard of — SpaceX adds to both enums —
         // fails its `RawRepresentable` init and falls back to `.unknown`, which

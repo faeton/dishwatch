@@ -583,3 +583,102 @@ struct TopGlow: View {
             .allowsHitTesting(false)
     }
 }
+
+// MARK: - Sky plot
+
+/// Where the dish is looking, drawn as the sky seen from underneath it.
+///
+/// Azimuth and elevation are the panel's most mistakable pair. As two numbers
+/// in a list they sit directly under a GPS row and read as a position — the
+/// question "are you sure that gps is azi and elevation?" is the evidence, and
+/// it is a reasonable reading of `-176° / 77°` when nothing on screen says
+/// otherwise. A picture cannot be misread that way: a dot inside a compass
+/// ring is obviously a *direction*, and no one mistakes it for a coordinate.
+///
+/// The projection is the standard sky plot, chosen because it makes the common
+/// case legible rather than because it is pretty: elevation runs from the
+/// horizon at the rim to the zenith at the centre, so a dish doing its job —
+/// which means pointing steeply up — parks near the middle, and a low, awkward
+/// aim falls visibly outward. North is up and east is right, the orientation
+/// every compass rose uses.
+///
+/// Deliberately not a dial or a pair of bars. Those would restate the numbers
+/// in a second visual encoding; this adds the thing the numbers cannot show,
+/// which is the two angles *together* as one direction in the sky.
+struct SkyPlot: View {
+    /// Boresight azimuth in degrees. Any range is fine — the dish reports
+    /// −180…180 and a compass wants 0…360, so this normalises rather than
+    /// trusting the caller.
+    var azimuthDeg: Double
+    /// Boresight elevation in degrees, 0 (horizon) to 90 (straight up).
+    var elevationDeg: Double
+    var size: CGFloat = 96
+
+    /// Compass bearing, 0..<360. `-176°` and `184°` are the same direction and
+    /// must land on the same pixel.
+    private var bearing: Double {
+        let b = azimuthDeg.truncatingRemainder(dividingBy: 360)
+        return b < 0 ? b + 360 : b
+    }
+
+    /// Clamped: the rim is the horizon. A dish reporting a negative elevation
+    /// is pointing into the ground, which is a reading worth showing at the
+    /// edge rather than off the edge.
+    private var elevation: Double { min(90, max(0, elevationDeg)) }
+
+    /// Distance from centre, 0 at the zenith and 1 at the horizon.
+    private var radiusFrac: Double { 1 - elevation / 90 }
+
+    var body: some View {
+        let r = size / 2
+        let markerR = r * 0.86   // leave the compass letters their own ring
+        // Screen coordinates: bearing 0 is up, and bearing increases clockwise
+        // (east is right), which is the opposite handedness to the maths.
+        let theta = (bearing - 90) * .pi / 180
+        let dot = CGPoint(x: r + cos(theta) * markerR * radiusFrac,
+                          y: r + sin(theta) * markerR * radiusFrac)
+
+        ZStack {
+            // Horizon, then the 30° and 60° elevation rings. Three rings is
+            // enough to read a position off; more turns the plot into a target.
+            ForEach([1.0, 2.0 / 3.0, 1.0 / 3.0], id: \.self) { frac in
+                Circle()
+                    .stroke(DW.text.opacity(frac == 1.0 ? 0.22 : 0.11), lineWidth: 1)
+                    .frame(width: markerR * 2 * frac, height: markerR * 2 * frac)
+            }
+            // Cardinal ticks, not a full rose: four letters is the most this
+            // can carry at 96 pt and still leave the dot the brightest thing.
+            //
+            // Offset per letter rather than one offset spun by `rotationEffect`.
+            // The rotation is the tidier expression and it is wrong: it turns
+            // the glyph as well as its position, so E rendered lying on its
+            // side (indistinguishable from a lower-case m), S upside down, and
+            // only N — the one at zero degrees — came out right.
+            ForEach(Array(["N", "E", "S", "W"].enumerated()), id: \.offset) { i, label in
+                let d = r * 0.95
+                let offsets: [CGSize] = [CGSize(width: 0, height: -d), CGSize(width: d, height: 0),
+                                         CGSize(width: 0, height: d), CGSize(width: -d, height: 0)]
+                Text(label)
+                    .font(.system(size: size * 0.1, weight: .semibold))
+                    .foregroundStyle(DW.textA(0.4))
+                    .offset(offsets[i])
+            }
+            // The beam, as a soft halo rather than a hard cone: the dish's
+            // actual beamwidth is not on the wire, so any drawn angle would be
+            // invented. A glow says "roughly here" without claiming a width.
+            Circle()
+                .fill(DW.cyan.opacity(0.18))
+                .frame(width: size * 0.22, height: size * 0.22)
+                .position(dot)
+                .blur(radius: size * 0.045)
+            Circle()
+                .fill(DW.cyan)
+                .frame(width: size * 0.085, height: size * 0.085)
+                .position(dot)
+        }
+        .frame(width: size, height: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Aim")
+        .accessibilityValue("bearing \(Int(bearing.rounded())) degrees, \(Int(elevation.rounded())) degrees above the horizon")
+    }
+}
