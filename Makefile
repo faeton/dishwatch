@@ -45,10 +45,28 @@ helper-universal:
 	@$(MAKE) --no-print-directory helper-check
 	@echo "  arches: $$(lipo -archs $(HELPER))"
 
+# Assert the properties the success line claims, one grep each.
+#
+# This checked `networkQuality` and then printed "no shell-outs, no geocoder" —
+# announcing a property it had never looked for. The geocoder genuinely is
+# absent (features_apphelper.go stubs reverseGeocode, so internal/geo is never
+# linked), which is exactly why the gap survived: the claim was true, so nothing
+# ever failed, and a build-tag regression that relinked Nominatim would have
+# been reported as clean.
+#
+# Also fails closed. The old form was a shell `||` chain, so a `strings` that
+# errored — unreadable path, missing binutils — took the success branch and
+# printed the reassuring line.
 helper-check:
-	@strings -a $(HELPER) | grep -q networkQuality \
-	  && { echo "  ERROR: apphelper build still contains networkQuality" >&2; exit 1; } \
-	  || echo "  $(HELPER)  (no shell-outs, no geocoder)"
+	@missing=; \
+	 for s in networkQuality nominatim openstreetmap; do \
+	   if strings -a $(HELPER) | grep -qi "$$s"; then missing="$$missing $$s"; fi; \
+	 done; \
+	 if [ -n "$$missing" ]; then \
+	   echo "  ERROR: apphelper build still contains:$$missing" >&2; \
+	   echo "  → rebuild with -tags apphelper; see features_apphelper.go" >&2; exit 1; \
+	 fi; \
+	 echo "  $(HELPER)  (no shell-outs, no geocoder — verified)"
 
 # Go json tags vs Swift CodingKeys, plus the schema version on both sides.
 contract:

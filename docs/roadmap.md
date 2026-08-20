@@ -331,12 +331,34 @@ to a target excluded from the app product. This one change removes the
 `DISHWATCH_BIN` arbitrary-exec hook, the demo battery toggle, the raw-socket
 prober and the env-var-controlled file write from the signed bundle at once.
 
-**2. Build a real helper, not a copy of the CLI.** A `cmd/dishwatch-helper`
-main, or a build tag that omits `geo`, `speed`, `raw`, `dash` and `watch`. Four
-ops ship: `poll`, `reboot`, `setAnchor`, `ping`. This is what makes
-`Info.plist`'s "nothing is sent anywhere else" true, and it deletes the
-`networkQuality`/`ping` shell-outs and the Nominatim client from the submission
-in one move.
+**2. Build a real helper, not a copy of the CLI.** — **done 2026-08-20.** The
+command table is now per-build: `dispatch_full.go` carries the CLI's nineteen
+verbs, `dispatch_apphelper.go` carries `helper`, `--version` and `--help`. The
+default command is per-build too, so a stray exec of the bundled engine prints
+what it is instead of dialling the dish and rendering a terminal dashboard from
+inside a sandboxed bundle.
+
+Guarding the *dispatch* rather than each command's file is what made it cheap:
+the render and interactive paths become unreachable and the linker drops them
+along with the string literals only they referenced. The integrators in dash.go
+stay reachable through `helper.poll`, which is correct — they are the engine.
+
+One thing the linker could not do on its own. `renderBank` is a package-level
+func var assigned from an `init()` in pb.go, and an `init()` always runs, so
+`pbRenderBank` was reachable however dead its only caller became — it kept the
+CLI's bank rendering alive inside the bundle by itself. Split into
+`pb_render.go` under `!apphelper`; the anchor logic beside it stays, because
+the app's `setAnchor` op calls straight into it.
+
+Result: `usage: sl` and `dies in` gone from the submitted binary, `Obstruction`
+4 → 1 and `Throughput` 6 → 4 — the remainder in both cases being wire field
+names (`obstructionStats`, `downlinkThroughputBps`) the engine legitimately
+needs. 100 KB smaller, and verified end to end against a live dish: banner
+reports `restricted: true`, `ping` and `poll` answer, `dash` is refused.
+
+The `networkQuality`/`ping` shell-outs and the Nominatim client were already
+absent via `features_apphelper.go`; `make helper-check` now actually greps for
+all three rather than printing a claim it never checked.
 
 **3. Fix the `ok`-with-no-data contract.** Decode command acknowledgements
 separately from poll responses so `reboot`/`setAnchor`/`ping` stop being read as

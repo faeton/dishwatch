@@ -133,7 +133,7 @@ SWIFT_ARCH    :=
 SWIFT_PRODUCT := $(BUILD_DIR)/$(APP)
 endif
 
-.PHONY: app run icon clean-app test dmg notarize notarize-app verify-release \
+.PHONY: app helper-fresh run icon clean-app test dmg notarize notarize-app verify-release \
         check-identity check-version
 
 # Always reassembles rather than treating $(APP_DIR) as a file target. A
@@ -142,7 +142,29 @@ endif
 # without touching any prerequisite, so `make app SANDBOX=0` after `make app`
 # would print "sandbox=0" and hand you back the sandboxed bundle. Assembling is
 # a copy and a codesign — cheap enough that caching it buys nothing and can lie.
-app:
+# Build the engine this bundle is about to embed, instead of trusting whatever
+# was last left in ../bin.
+#
+# `app` required only that HELPER_SRC be *executable* (see the copy below), so a
+# stale helper sailed straight through every guard we have: the protocol banner
+# still reads 3, `check-contract.sh` compares Go source against Swift source and
+# stays green, and the Swift tests decode checked-in fixtures rather than the
+# binary. Adding a Dashboard field and running `make app` therefore produced a
+# bundle whose UI reads a key its engine never sends — a row that renders
+# nothing, with no error on either side. Only `notarize-app` and `dmg` rebuilt
+# first, so the trap was open on exactly the builds run most often.
+#
+# Skipped when HELPER_SRC was overridden on the command line or in the
+# environment: then the path *is* the instruction, and rebuilding ../bin would
+# quietly ignore it. `?=` leaves origin as "file" when the default stands.
+helper-fresh:
+ifeq ($(origin HELPER_SRC),file)
+	@$(MAKE) -C .. $(HELPER_TARGET)
+else
+	@echo "  HELPER_SRC overridden — embedding $(HELPER_SRC) as given, not rebuilding"
+endif
+
+app: helper-fresh
 	swift build -c $(CONFIG) $(SWIFT_ARCH)
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
