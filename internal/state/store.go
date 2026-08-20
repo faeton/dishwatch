@@ -72,13 +72,28 @@ const (
 // ("true"/"false") to match jq's @sh output and keep the two implementations
 // binary-compatible on disk.
 type Snapshot struct {
-	TS             int64   `json:"ts"`
-	Boots          int     `json:"boots"`
-	UptimeS        int64   `json:"uptimeS"`
-	State          string  `json:"state"`
-	Disable        string  `json:"disable"`
-	Alerts         string  `json:"alerts"`
-	ReadyAll       string  `json:"ready_all"` // "true"/"false"
+	TS       int64  `json:"ts"`
+	Boots    int    `json:"boots"`
+	UptimeS  int64  `json:"uptimeS"`
+	State    string `json:"state"`
+	Disable  string `json:"disable"`
+	Alerts   string `json:"alerts"`
+	ReadyAll string `json:"ready_all"` // "true"/"false"
+	// What the dish is provisioned for, carried here so DiffAndLog can report a
+	// change in it. The live values are on every Dashboard already; these exist
+	// only to give the *transition* a timestamp in events.log, which is the one
+	// question a live reading cannot answer — "did the plan switch take, and
+	// when?" — and the one worth asking on a crossing.
+	//
+	// Empty means "not recorded", not "not provisioned", and DiffAndLog treats
+	// it as a reason to stay quiet. Two things produce it: a snapshot written
+	// before these fields existed, and the bash fallback, which rebuilds
+	// state.json from scratch on every write and so drops any field it does not
+	// know about (see the README note about stats.json — same mechanism, and
+	// the reason these are diffed defensively rather than trusted).
+	Class          string  `json:"class"`
+	Mobility       string  `json:"mobility"`
+	Metered        string  `json:"metered"` // "true"/"false"/"" — string to match ReadyAll
 	Ping           float64 `json:"ping"`
 	Drop           float64 `json:"drop"`
 	EnergyWh       float64 `json:"energyWh"`
@@ -385,6 +400,19 @@ func DiffAndLog(cur *Snapshot, prev *Snapshot) error {
 	if cur.Disable != prev.Disable {
 		_ = LogEvent("SERVICE", fmt.Sprintf("%s → %s", prev.Disable, cur.Disable))
 	}
+	// Plan transitions, each abstaining when either side is unrecorded.
+	//
+	// The guard is the whole design. Every other diff above compares two values
+	// the dish reported; these compare two values that may simply be *missing*
+	// — from a pre-upgrade snapshot, or because `sl` (bash) rewrote state.json
+	// without them. Diffing naively would then log `→ CONSUMER` as a plan
+	// change every time the Go build ran after the bash one, which is a false
+	// entry in the one log someone reads to find out when their plan actually
+	// moved. Silence on a missing value is the only honest option; a real
+	// change still lands the moment two recorded values differ.
+	logPlanChange("CLASS", prev.Class, cur.Class)
+	logPlanChange("MOBILITY", prev.Mobility, cur.Mobility)
+	logPlanChange("METERED", prev.Metered, cur.Metered)
 	if cur.ReadyAll != prev.ReadyAll {
 		_ = LogEvent("READY", fmt.Sprintf("all-ready %s → %s", prev.ReadyAll, cur.ReadyAll))
 	}
@@ -392,6 +420,19 @@ func DiffAndLog(cur *Snapshot, prev *Snapshot) error {
 		_ = LogEvent("ALERTS", fmt.Sprintf("%s → %s", prev.Alerts, cur.Alerts))
 	}
 	return nil
+}
+
+// logPlanChange records a provisioning transition, or stays silent.
+//
+// Silent on three inputs, not one: equal values (nothing happened), and either
+// side empty (nothing was recorded, on a field where absence is routine rather
+// than exceptional). Splitting this out rather than inlining the condition
+// three times is what makes the abstention testable as one rule.
+func logPlanChange(kind, prev, cur string) {
+	if prev == "" || cur == "" || prev == cur {
+		return
+	}
+	_ = LogEvent("PLAN", fmt.Sprintf("%s %s → %s", kind, prev, cur))
 }
 
 // MarkUnreachable appends an UNREACH line, rate-limited to once per minute so
@@ -417,6 +458,60 @@ func MarkUnreachable(addr string) error {
 		break
 	}
 	return LogEvent("UNREACH", fmt.Sprintf("dish/api not answering (%s)", addr))
+}
+
+// UptimeDur renders a dish uptime, coarsening as it grows:
+//
+//	45s · 42m · 1h5m · 13h · 3d4h · 24d · 2mo14d · 1y3mo
+//
+// Two rules, both about what a reader of an uptime figure actually wants:
+//
+//   - The minor unit appears only while the major one is a single digit. "1h5m"
+//     earns its detail; "13h 42m" does not, and those minutes churn on every
+//     refresh for someone who is reading "about half a day". A zero minor unit
+//     is dropped too, so two hours exactly is "2h".
+//   - Seconds never pair with minutes, for the same churn reason — five minutes
+//     after a reboot is "5m", not "5m12s".
+//
+// This is deliberately not HumanDur, which spells out every unit down to the
+// second ("3d 4h 12m 30s"). That is the right shape for a log line and the wrong
+// one for a header that redraws once a second.
+//
+// A month here is 30 days and a year is 12 of those. This is an uptime readout,
+// not a calendar.
+func UptimeDur(sec int64) string {
+	if sec < 60 {
+		if sec < 0 {
+			sec = 0
+		}
+		return fmt.Sprintf("%ds", sec)
+	}
+	m := sec / 60
+	if m < 60 {
+		return fmt.Sprintf("%dm", m)
+	}
+	h := m / 60
+	if h < 24 {
+		return compoundDur(h, "h", m%60, "m")
+	}
+	d := h / 24
+	if d < 30 {
+		return compoundDur(d, "d", h%24, "h")
+	}
+	mo := d / 30
+	if mo < 12 {
+		return compoundDur(mo, "mo", d%30, "d")
+	}
+	return compoundDur(mo/12, "y", mo%12, "mo")
+}
+
+// compoundDur joins a major unit with its minor one, keeping the minor only
+// while the major is a single digit and the minor is non-zero.
+func compoundDur(major int64, majorUnit string, minor int64, minorUnit string) string {
+	if major < 10 && minor > 0 {
+		return fmt.Sprintf("%d%s%d%s", major, majorUnit, minor, minorUnit)
+	}
+	return fmt.Sprintf("%d%s", major, majorUnit)
 }
 
 // HumanDur is the Go equivalent of the bash _sl_humanize_dur helper.

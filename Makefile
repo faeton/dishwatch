@@ -13,7 +13,7 @@ SHRINK    := -s -w
 PLATFORMS := darwin/arm64 darwin/amd64 linux/arm64 linux/amd64
 
 .PHONY: build release clean cross shrink size deps publish publish-dry helper \
-        helper-universal helper-check contract sl-lock check site site-dry \
+        helper-universal helper-check contract sl-lock uptime-parity sl-render check site site-dry \
         cask cask-dry
 
 # Dev build — includes debug info, fast compile.
@@ -59,8 +59,18 @@ contract:
 sl-lock:
 	@./scripts/check-sl-lock.sh
 
+# One rule, three implementations — Go, bash, and the jq filter inside
+# `sl status`. `go test` can see only the first.
+uptime-parity:
+	@./scripts/check-uptime-parity.sh
+
+# What `sl` actually renders, driven against fixtures through a grpcurl shim.
+# The parity check validates the ladder; this one validates the program.
+sl-render:
+	@./scripts/check-sl-render.sh
+
 # What CI runs, minus the Swift half.
-check: contract sl-lock
+check: contract sl-lock uptime-parity sl-render
 	gofmt -l . | grep -v '^dist/' | (! grep .) || { echo "gofmt"; exit 1; }
 	go vet ./...
 	go vet -tags apphelper ./...

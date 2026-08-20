@@ -109,6 +109,14 @@ func snapshotAndLog(s *dish.Status, h *dish.History) error {
 		ReadyAll: strconv.FormatBool(allTrue(s.ReadyStates)),
 		Ping:     s.PopPingLatencyMs,
 		Drop:     s.PopPingDropRate,
+		Class:    s.ClassOfService,
+		Mobility: s.MobilityClass,
+		// Recorded unconditionally, unlike Class and Mobility, because the
+		// wire drops `treatAsMetered` when false — so "absent" here means the
+		// dish said no, not that nothing was asked. Writing "false" rather than
+		// "" is what lets DiffAndLog see false→true as a real transition
+		// instead of an unrecorded one.
+		Metered: strconv.FormatBool(s.TreatAsMetered),
 	}
 	cur.EnergyWh, cur.LastCurrent, cur.ObsStartTs, cur.ObsStartUptime, cur.ObsSeconds =
 		integrateEnergy(s, h, prev, now)
@@ -335,6 +343,10 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 	}
 	fmt.Fprintln(w)
 
+	// Resolved before the `state` local below, which shadows the package for
+	// the rest of this function.
+	upStr := state.UptimeDur(s.DeviceState.UptimeS)
+
 	// State machine
 	state := s.State
 	if state == "" {
@@ -354,11 +366,11 @@ func renderDash(w io.Writer, s *dish.Status, h *dish.History, loc *dish.Location
 	}
 
 	// Header
-	upH := float64(s.DeviceState.UptimeS) / 3600
-	fmt.Fprintf(w, "  %sStarlink%s  %s●%s %s%s  %s%s · %s · %s%s  %sup %.1fh · boots %d%s\n",
+	fmt.Fprintf(w, "  %sStarlink%s  %s●%s %s%s  %s%s · %s · %s%s  %sup %s · boots %d%s\n",
 		ui.Hdr, ui.Rst, dotColor, ui.Rst, ui.Val, state,
-		ui.Dim, dashIf(s.ClassOfService), dashIf(s.MobilityClass), dashIf(s.DeviceInfo.CountryCode), ui.Rst,
-		ui.Dim, upH, s.DeviceInfo.Bootcount, ui.Rst)
+		ui.Dim, dashIf(s.ClassOfService), dashIf(s.MobilityClass),
+		dashIf(s.DeviceInfo.CountryCode)+meteredNote(s.TreatAsMetered), ui.Rst,
+		ui.Dim, upStr, s.DeviceInfo.Bootcount, ui.Rst)
 	fmt.Fprintf(w, "  %s%s%s · fw %s%s\n\n",
 		ui.Dim, s.DeviceInfo.HardwareVersion, hardwareNote(s.DeviceInfo.HardwareVersion),
 		s.DeviceInfo.SoftwareVersion, ui.Rst)
@@ -750,29 +762,64 @@ func signalScore(s *dish.Status) int {
 	return int(math.Round(score))
 }
 
+// serviceStatus turns a disablement code into a phrase and a colour.
+//
+// The cases are `SpaceX.API.Satellites.Network.UtDisablementCode`, read off the
+// dish by gRPC reflection rather than guessed. That matters: this table used to
+// carry SUSPENDED, OUT_OF_SERVICE_AREA, OUT_OF_REGION, DISABLED_BY_COMMAND,
+// UNKNOWN_USER_TERMINAL and INVALID_HARDWARE_VERSION, none of which are in the
+// enum. They could never match, so every real reason a dish stops working fell
+// through to `default` and printed the raw SCREAMING_CASE in warning yellow —
+// including the ones that are hard stops and should be red.
+//
+// Unknown codes still fall through, and still print raw. That is deliberate:
+// SpaceX adds to this enum, and a code we cannot name is worth showing verbatim
+// so it can be looked up, rather than being flattened into a wrong phrase.
 func serviceStatus(code string) (string, string) {
 	switch code {
 	case "OKAY":
 		return "active ✓", ui.OK
 	case "NO_ACTIVE_ACCOUNT":
 		return "no account", ui.Err
-	case "SUSPENDED":
-		return "suspended (billing)", ui.Err
-	case "OUT_OF_SERVICE_AREA":
-		return "outside plan area", ui.Err
-	case "OUT_OF_REGION":
-		return "wrong region", ui.Err
-	case "DISABLED_BY_COMMAND":
-		return "disabled by SpaceX", ui.Err
-	case "UNKNOWN_USER_TERMINAL":
-		return "unrecognized dish", ui.Err
-	case "INVALID_HARDWARE_VERSION":
-		return "firmware invalid", ui.Err
-	case "":
+	case "ACCOUNT_DISABLED":
+		return "account disabled", ui.Err
+	case "TOO_FAR_FROM_SERVICE_ADDRESS":
+		return "too far from service address", ui.Err
+	case "IN_OCEAN":
+		return "at sea — not covered by plan", ui.Err
+	case "ROAM_RESTRICTED":
+		return "roaming not permitted here", ui.Err
+	case "BLOCKED_COUNTRY":
+		return "country not licensed", ui.Err
+	case "BLOCKED_AREA":
+		return "area blocked", ui.Err
+	case "CELL_IS_DISABLED":
+		return "cell disabled here", ui.Err
+	case "DATA_OVERAGE_SANDBOX_POLICY":
+		return "data allowance spent", ui.Err
+	case "MOVING_TOO_FAST_FOR_POLICY":
+		return "moving too fast for plan", ui.Err
+	case "UNDER_AVIATION_FLYOVER_LIMITS":
+		return "aviation flyover limit", ui.Err
+	case "UNSUPPORTED_VERSION":
+		return "firmware unsupported", ui.Err
+	case "UNKNOWN_LOCATION":
+		return "location unknown", ui.Warn
+	case "UNKNOWN_STATE", "":
 		return "?", ui.Warn
 	default:
 		return code, ui.Warn
 	}
+}
+
+// meteredNote is the trailing clause on the service line when the dish says the
+// link is capped. Empty when it does not — see Status.TreatAsMetered for why an
+// absent field must not be read as "uncapped".
+func meteredNote(metered bool) string {
+	if metered {
+		return " · metered"
+	}
+	return ""
 }
 
 func readyKeysCompact(m map[string]bool) string {

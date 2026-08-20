@@ -38,6 +38,18 @@ type Status struct {
 	DlBandwidthRestricted string  `json:"dlBandwidthRestrictedReason"`
 	UlBandwidthRestricted string  `json:"ulBandwidthRestrictedReason"`
 	DisablementCode       string  `json:"disablementCode"`
+	// TreatAsMetered is the dish's own answer to "is this connection capped?"
+	// — `treat_as_metered`, field 1056. It is the closest thing on this wire to
+	// a plan fact: everything else here describes what the dish is *allowed* to
+	// do, this one describes what it will *cost*.
+	//
+	// false is both "not metered" and "firmware too old to have the field",
+	// because it is a bare bool and we unmarshal with EmitUnpopulated:false, so
+	// an unmetered dish omits it entirely. That collapse is safe in a way the
+	// mobility one is not: the two indistinguishable cases agree on the answer
+	// a caller acts on. Nothing should read a false here as the dish promising
+	// the link is uncapped.
+	TreatAsMetered bool `json:"treatAsMetered"`
 
 	ObstructionStats struct {
 		FractionObstructed float64 `json:"fractionObstructed"`

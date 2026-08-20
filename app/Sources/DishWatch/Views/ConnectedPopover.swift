@@ -4,6 +4,11 @@ import SwiftUI
 struct ConnectedPopover: View {
     var d: DishData
     @Binding var showSettings: Bool
+    /// Injectable so the render harness can draw a channel this process is not.
+    /// `BuildInfo.main` reads `Bundle.main`, and the harness runs as a bare
+    /// SwiftPM executable with no Info.plist — so left to itself every snapshot
+    /// would show the one case that draws nothing.
+    var build: BuildInfo = .main
     @EnvironmentObject var store: AppState
     @State private var detailExpanded = false
     @State private var confirmReboot = false
@@ -145,6 +150,27 @@ struct ConnectedPopover: View {
                     StatusDot(color: dotColor, pulse: store.hasLoaded && d.state == .connected)
                     Text(heroLabel).font(.system(size: 22, weight: .bold))
                 }
+                // Why, immediately under the what. "Disabled" on its own is the
+                // panel's least useful word: it is the one state the owner can
+                // sometimes act on, and the action depends entirely on a cause
+                // the hero cannot hold — sailing back inshore and paying a bill
+                // are both answers to it.
+                //
+                // Wraps rather than truncates. The longest cause is a clause,
+                // not a word, and half of "over open ocean, which this plan does
+                // not cover" is worse than none of it.
+                if let why = d.serviceBlockedReason {
+                    Text(why)
+                        .font(.system(size: 12))
+                        // Red to match the dot beside it, not amber: amber is
+                        // the theme's power colour and `.disabled` already
+                        // draws a red dot. A cause in a third colour would read
+                        // as a third severity.
+                        .foregroundStyle(DW.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
                 // Identity first, then the session facts. The model used to
                 // trail the uptime line as a bare word, then spent a release in
                 // the header where it did not fit; here it has the panel's full
@@ -159,7 +185,7 @@ struct ConnectedPopover: View {
                     HardwareChip(model: d.hardwareShort, aim: d.hardwareAim)
                         .padding(.top, 9)
                 }
-                Text("up \(d.uptimeHours, specifier: "%.1f") h · boots \(d.boots)")
+                Text("up \(Self.uptime(d.uptimeSeconds)) · boots \(d.boots)")
                     .font(.system(size: 12.5)).monospacedDigit().foregroundStyle(DW.textA(0.55))
                     .padding(.top, 8)
                 // Two lines, both whole. A real dish reports a 28-character ID
@@ -554,6 +580,51 @@ struct ConnectedPopover: View {
         "ping \(Int(o.pingAvg)) · \(Int(o.cleanPct))% clean · peak ↓\(Int(o.downPeak)) ↑\(Int(o.upPeak)) · \(String(format: "%.1f", o.powerAvg)) W"
     }
 
+    /// Dish uptime, coarsening as it grows:
+    ///
+    ///     45s · 42m · 1h5m · 13h · 3d4h · 24d · 2mo14d · 1y3mo
+    ///
+    /// The old line was `%.1f h`, which spent its only decimal on the least
+    /// useful end of the range: six minutes after a reboot it read "0.1 h", and
+    /// a dish up for three weeks read "504.0 h". Neither is a number anyone
+    /// converts in their head.
+    ///
+    /// Two rules, both about what a reader of an uptime figure wants:
+    ///
+    /// - The minor unit shows only while the major one is a single digit. "1h5m"
+    ///   earns the detail; "13h 42m" does not, and those minutes churn on every
+    ///   refresh for someone reading "about half a day". A zero minor unit is
+    ///   dropped, so two hours exactly is "2h".
+    /// - Seconds never pair with minutes, for the same reason — five minutes
+    ///   after a reboot is "5m", not "5m12s".
+    ///
+    /// Distinct from `dur` on purpose: that one is the CLI's shared span format
+    /// and keeps both units at every size. A month here is 30 days and a year is
+    /// 12 of those; this is an uptime readout, not a calendar. Mirrors
+    /// `state.UptimeDur` on the Go side.
+    static func uptime(_ seconds: Int64) -> String {
+        let s = max(0, seconds)
+        if s < 60 { return "\(s)s" }
+        let m = s / 60
+        if m < 60 { return "\(m)m" }
+        let h = m / 60
+        if h < 24 { return compound(h, "h", m % 60, "m") }
+        let d = h / 24
+        if d < 30 { return compound(d, "d", h % 24, "h") }
+        let mo = d / 30
+        if mo < 12 { return compound(mo, "mo", d % 30, "d") }
+        return compound(mo / 12, "y", mo % 12, "mo")
+    }
+
+    /// Major unit plus the minor one, keeping the minor only while the major is
+    /// a single digit and the minor is non-zero: "1h5m", "2h", "13h".
+    private static func compound(_ major: Int64, _ majorUnit: String,
+                                 _ minor: Int64, _ minorUnit: String) -> String {
+        major < 10 && minor > 0
+            ? "\(major)\(majorUnit)\(minor)\(minorUnit)"
+            : "\(major)\(majorUnit)"
+    }
+
     /// Matches the CLI's `HumanDur` so the two surfaces read the same.
     static func dur(_ s: Int64) -> String {
         if s < 60 { return "\(s)s" }
@@ -800,6 +871,9 @@ struct ConnectedPopover: View {
         if let service = d.serviceLine {
             Divider().background(DW.hairline).padding(.vertical, 2)
             detailLine("Service", service)
+            if let blocked = d.serviceBlockedReason {
+                detailLine("Blocked", blocked)
+            }
             if let why = d.serviceExplanation {
                 Text(why)
                     .font(.system(size: 11))
@@ -851,11 +925,30 @@ struct ConnectedPopover: View {
         case .stale:
             status = store.lastGoodAgoText.map { "stale — last reading \($0)" } ?? "stale"
         }
+        // Build identity trails the data status, and is deliberately *not*
+        // coloured by it. The amber above means "do not trust this reading";
+        // whether the bundle is a dev build is a different axis entirely — a
+        // local build shows live data as truthfully as the cask does — and
+        // folding the two into one colour would make a dev build look like a
+        // data fault. Dimmer than the address, since it changes far less often
+        // than anything else on the line.
+        let buildLabel = build.footerLabel
         return HStack {
             Text("\(d.dishAddr) · \(status)")
                 .font(.system(size: 11)).monospacedDigit()
                 .foregroundStyle(store.quality.isTrustworthy ? DW.textA(0.38) : DW.amber.opacity(0.8))
-            Spacer()
+            if let buildLabel {
+                Text("· \(buildLabel)")
+                    .font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(DW.textA(0.3))
+                    // The address and the status are the load-bearing half of
+                    // this line; if anything has to give under a long dev
+                    // version string it is this. Shrinking beats pushing the
+                    // Pin button off the panel, and beats truncating an IP.
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .layoutPriority(-1)
+            }
+            Spacer(minLength: 6)
             // Pin alone. Reboot used to sit here at the same weight, which put
             // a rare destructive action one stray click from a daily toggle —
             // see AppMenuButton.reboot, which now carries it.

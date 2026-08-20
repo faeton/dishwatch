@@ -414,6 +414,8 @@ collected, which is the app's cue to hide the footer.
 | `seriesSeconds` | samples the sparkline series actually carry — **not** the window requested; see the reversal note under *Windows* |
 | `hardwareShort` | model with its generation — `Standard Gen2`, `Mini`, or the raw string when unplaceable |
 | `hardwareAim` | `motorized`, `manual`, or `""` — inferred from the model, since the dish will not say; `""` renders as nothing |
+| `metered` | `true` when the dish reports `treatAsMetered`. The wire omits the field when false, so `false` also means "firmware too old to say" — the panel may state that a link **is** capped, never that one is not. The dish never reports how much allowance remains, so no view may imply a budget |
+| `serviceDisable` | why service stopped, normalized off `UtDisablementCode` — `inOcean`, `roamRestricted`, `dataOverage`, `movingTooFast`, `noAccount`, … or `""`. Present exactly when `state` is `Disabled`; it says the thing `state` cannot, since a dish blocked over open ocean and one blocked for an unpaid bill read identically without it. An unrecognized code maps to `""`: the outage still shows, only its reason goes unstated |
 | `obsSeconds` | samples actually integrated this boot |
 | `obsCoverage` | `obsSeconds ÷ uptime`, 0..1 |
 | `sessPingAvg` | ms, seconds with a returned packet only |

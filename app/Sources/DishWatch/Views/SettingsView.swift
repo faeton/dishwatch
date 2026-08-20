@@ -462,7 +462,14 @@ struct SettingsContent: View {
         }
     }
 
+    /// The whole build identity, not just the marketing version.
+    ///
+    /// This used to be `CFBundleShortVersionString` alone, which is the one
+    /// string that cannot answer "which build is this?" — it is `git describe`
+    /// stripped to dotted digits, so every bundle cut from tag v0.2.7 reports
+    /// `0.2.7` whether it came off the DMG or out of someone's `.build`
+    /// directory. See BuildInfo.
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        BuildInfo.main.detailLabel
     }
 }

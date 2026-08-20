@@ -118,9 +118,139 @@ _sl_write_atomic() {
   printf '%s' "$data" > "$tmp" && mv -f "$tmp" "$path"
 }
 
+# Force a value into a plain decimal integer before any arithmetic sees it.
+#
+# Telemetry is not a number until we have made it one. `uptimeS` is a *string*
+# field on the wire (see internal/dish/status.go), it reaches us through
+# unauthenticated plaintext gRPC to 192.168.100.1, and bash evaluates a string
+# operand of `(( ))` as an arithmetic *expression* — recursively. So a dish
+# answering `BASH_VERSINFO[$(...)0]` gets its command substitution executed by
+# the `(( s < 0 ))` that was only trying to clamp a negative. Verified: it runs.
+# "The dish said so" is not a trust statement; anything that can answer on that
+# address can say it.
+#
+# Leading zeros are the same boundary and bite without any attacker at all:
+# bash reads `010` as octal 8, and `09` not as 9 but as a fatal "value too
+# great for base" — which, under this script's `set -e`, takes the whole
+# dashboard down. Neither is hypothetical for a zero-padded field.
+#
+# Anything that is not a plain integer becomes 0: a header cannot render a
+# value we do not have, and 0s is the honest rendering of "the dish did not
+# tell us". Over-long inputs clamp instead of wrapping, because bash truncates
+# past 18 digits and wraps into a *negative* — which would then clamp to 0 and
+# read as a fresh boot.
+_sl_int() {
+  local v="${1-}" neg=""
+  # `[!0-9]` is locale-sensitive: in some collations non-ASCII digits sort
+  # inside the 0-9 range and pass straight through into arithmetic. Pin it so
+  # "digit" means the ten ASCII ones, on every machine and in every locale.
+  local LC_ALL=C
+  # Trim ASCII whitespace and accept a leading `+` before rejecting. Bash
+  # arithmetic accepted both (` 3900` and `+3900` are 3900), so treating them
+  # as junk would turn a padded field into a fresh boot — a wrong reading that
+  # looks exactly like a real one. Rejecting them is safe but not honest.
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  case "$v" in +*) v="${v#+}";; esac
+  case "$v" in -*) neg="-"; v="${v#-}";; esac
+  case "$v" in ""|*[!0-9]*) printf '0'; return;; esac
+  # Length cap before the zero-strip below, which is superlinear in bash 3.2:
+  # 16k zeros costs ~0.46s and 64k costs ~7s, comfortably past the ~3s redraw
+  # interval — so an over-long telemetry string was a CPU denial of service,
+  # introduced by this very sanitiser. A real uptimeS is at most 19 digits;
+  # past 32 characters the device is not telling us a number we need to render
+  # faithfully, and 0s is the honest answer.
+  [ "${#v}" -gt 32 ] && { printf '0'; return; }
+  v="${v#"${v%%[!0]*}"}"            # strip leading zeros; octal is not a thing here
+  [ -z "$v" ] && v=0                # the input was all zeros
+  # 18 digits always fit int64; 20+ never do; 19 has to be compared. Clamping
+  # the whole 19-digit width was wrong in a quiet way — every legitimate value
+  # from 10^18 up to INT64_MAX-1 came back as INT64_MAX. String comparison is
+  # exact here precisely because the leading zeros are already gone and both
+  # sides are the same length.
+  if [ "${#v}" -gt 19 ] || { [ "${#v}" -eq 19 ] && [ "$v" \> "9223372036854775807" ]; }; then
+    printf '%s9223372036854775807' "$neg"
+    return
+  fi
+  [ "$v" = 0 ] && neg=""     # no such thing as -0
+  printf '%s%s' "$neg" "$v"
+}
+
+# The same boundary discipline as _sl_int, for values that are genuinely
+# fractional — throughput, ping, angles, rates.
+#
+# These do not reach `(( ))`; they reach `awk "BEGIN{...$VAR...}"`, which is
+# worse in one specific way: the value is spliced into awk *source*, and awk
+# has system(). A dish answering `1}{system("...")` for popPingLatencyMs owns
+# the shell running the dashboard. There are ~40 such interpolations below and
+# rewriting each as `awk -v` would be the textbook fix; sanitising the handful
+# of values they all draw from is the same guarantee in one place, and does not
+# risk changing any of the formatting those 40 lines do.
+#
+# Accepts what JSON can legitimately hold — optional sign, integer or decimal,
+# optional exponent — and nothing else. Anything else becomes 0, because a
+# reading we cannot trust is not a reading.
+_sl_num() {
+  local v="${1-}"
+  local LC_ALL=C
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  [ "${#v}" -gt 40 ] && { printf '0'; return; }
+  if [[ $v =~ ^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
+    printf '%s' "$v"
+  else
+    printf '0'
+  fi
+}
+
+# Uptime for a reading someone takes in at a glance: one unit, plus the minor
+# one only while the major is a single digit and the minor is non-zero. So
+# 1h5m, but 13h — those minutes churn on every refresh for someone reading
+# "about half a day" — and 2h, not 2h0m. Seconds never pair with minutes for
+# the same reason; under a minute you still get 45s.
+#
+# Deliberately not _sl_humanize_dur, which spells out every unit down to the
+# second: that shape is right for a log line and wrong for a header that
+# redraws every few seconds. Mirrors state.UptimeDur in the Go CLI — the two
+# render the same dish, so keep them in step.
+_sl_uptime_dur() {
+  local s m h d mo
+  s=$(_sl_int "${1-}")
+  # Clamp here rather than in _sl_int: "never render a negative uptime" is this
+  # ladder's rule (state.UptimeDur does the same), not a fact about integers.
+  # Safe now in a way it was not before — `s` is a plain decimal integer by the
+  # time this arithmetic sees it.
+  (( s < 0 )) && s=0
+  if (( s < 60 )); then printf '%ds' "$s"; return; fi
+  m=$(( s / 60 ))
+  if (( m < 60 )); then printf '%dm' "$m"; return; fi
+  h=$(( m / 60 ))
+  if (( h < 24 )); then _sl_compound_dur "$h" h "$(( m % 60 ))" m; return; fi
+  d=$(( h / 24 ))
+  if (( d < 30 )); then _sl_compound_dur "$d" d "$(( h % 24 ))" h; return; fi
+  mo=$(( d / 30 ))
+  if (( mo < 12 )); then _sl_compound_dur "$mo" mo "$(( d % 30 ))" d; return; fi
+  _sl_compound_dur "$(( mo / 12 ))" y "$(( mo % 12 ))" mo
+}
+
+# Joins a major unit with its minor one, keeping the minor only while the
+# major is a single digit and the minor is non-zero.
+_sl_compound_dur() {
+  if (( $(_sl_int "${1-}") < 10 && $(_sl_int "${3-}") > 0 )); then
+    printf '%d%s%d%s' "$1" "$2" "$3" "$4"
+  else
+    printf '%d%s' "$1" "$2"
+  fi
+}
+
 # Humanize a duration in seconds as "1d 2h 3m 4s" (skip zero leading units).
 _sl_humanize_dur() {
-  local s=$1 d h m
+  local s d h m
+  # Same boundary rule as the ladder. Its callers pass `$(( ))` results today,
+  # so this is not reachable from telemetry — but it is the same `(( ))`-on-a-
+  # string shape, one edit away from being reachable, and the guard costs a
+  # fork on a path that already forks.
+  s=$(_sl_int "${1-}")
   (( s < 0 )) && s=0
   d=$(( s / 86400 )); s=$(( s % 86400 ))
   h=$(( s / 3600 ));  s=$(( s % 3600 ))
@@ -324,20 +454,48 @@ dash() {
     @sh "DL_LIM=\($s.dlBandwidthRestrictedReason // "?")",
     @sh "UL_LIM=\($s.ulBandwidthRestrictedReason // "?")",
     @sh "DISABLE=\($s.disablementCode // "?")",
+    @sh "METERED=\($s.treatAsMetered // false)",
     @sh "READY_ALL=\(($r | to_entries | map(.value) | all))",
     @sh "READY_STR=\($r | to_entries | map(.key + "=" + (.value|tostring)) | join("  "))",
     @sh "ALERTS=\(($a | [to_entries[] | select(.value==true) | .key]) | if length==0 then "none" else join(", ") end)"
   ')"
 
+  # Normalise the one telemetry value this function then does arithmetic on.
+  #
+  # Hardening `_sl_uptime_dur` was NOT enough, and believing otherwise was the
+  # mistake: `@sh` makes the *assignment* safe, but `UPS` is afterwards used as
+  # a bare operand in `(( ))` at several places below and in the persist path —
+  # `OBS_START_UP=$UPS` followed by `(( OBS_START_UP < 0 ))` is the first one
+  # reached on a fresh run — and bash evaluates a string operand as an
+  # arithmetic *expression*. The round-1 payload
+  # `BASH_VERSINFO[$(touch /tmp/pwned)0]` still executed there while the header
+  # dutifully rendered `0s`. Sanitising at the boundary is the fix; sanitising
+  # at one consumer only moves which `(( ))` gets there first.
+  #
+  # Deliberately NOT applied to PREV_UPS: that one is `// ""` on purpose and
+  # `[[ -n "$PREV_UPS" ]]` distinguishes "no previous sample" from a real zero,
+  # so forcing it to 0 here would silently change reboot detection.
+  UPS=$(_sl_int "$UPS")
+  # Every telemetry number the awk calls below interpolate. Sanitised here, at
+  # the one place they enter the shell, rather than at each of ~40 call sites.
+  BOOTS=$(_sl_int "$BOOTS"); ETH=$(_sl_int "$ETH"); SATS=$(_sl_int "$SATS")
+  PATCHES=$(_sl_int "$PATCHES"); OBS_VALID=$(_sl_num "$OBS_VALID")
+  DOWN_BPS=$(_sl_num "$DOWN_BPS"); UP_BPS=$(_sl_num "$UP_BPS")
+  PING=$(_sl_num "$PING");         DROP=$(_sl_num "$DROP")
+  OBS_FRAC=$(_sl_num "$OBS_FRAC"); OBS_TIME=$(_sl_num "$OBS_TIME")
+  AZ=$(_sl_num "$AZ");             EL=$(_sl_num "$EL")
+  AZ_WANT=$(_sl_num "$AZ_WANT");   EL_WANT=$(_sl_num "$EL_WANT")
+  TILT=$(_sl_num "$TILT")
+
   # derived values
-  local down_mbps up_mbps ping drop_pct obs_pct time_obs_pct up_h
+  local down_mbps up_mbps ping drop_pct obs_pct time_obs_pct up_str
   down_mbps=$(awk "BEGIN{printf \"%.2f\", $DOWN_BPS/1e6}")
   up_mbps=$(awk "BEGIN{printf \"%.2f\", $UP_BPS/1e6}")
   ping=$(awk "BEGIN{printf \"%.1f\", $PING}")
   drop_pct=$(awk "BEGIN{printf \"%.1f\", $DROP*100}")
   obs_pct=$(awk "BEGIN{printf \"%.2f\", $OBS_FRAC*100}")
   time_obs_pct=$(awk "BEGIN{printf \"%.2f\", $OBS_TIME*100}")
-  up_h=$(awk "BEGIN{printf \"%.1f\", $UPS/3600}")
+  up_str=$(_sl_uptime_dur "$UPS")
   # % of a nominal 200 Mbps for throughput bars (just visual)
   local dn_pct up_pct
   dn_pct=$(awk "BEGIN{printf \"%d\", ($DOWN_BPS/2e8)*100}")
@@ -366,6 +524,8 @@ dash() {
       .dishGetHistory as $h |
       @sh "CUR_IDX=\($h.current | tonumber)",
       @sh "HIST_LEN=\($h.powerIn | length)"')"
+    # Both feed `(( ))` just below and --argjson just after that.
+    CUR_IDX=$(_sl_int "${CUR_IDX:-0}"); HIST_LEN=$(_sl_int "${HIST_LEN:-0}")
     if (( HIST_LEN > 0 && CUR_IDX > 0 )); then
       PW_NOW=$(echo "$HIST_JSON" | jq -r --argjson cur "$CUR_IDX" --argjson len "$HIST_LEN" '
         .dishGetHistory.powerIn as $p |
@@ -506,10 +666,17 @@ dash() {
   [[ "${SL_WATCH:-}" == "1" ]] || printf '\e[H\e[J'
   printf "\n"
   # two-line header: state + identity / hardware + software
-  printf "  %sStarlink%s  %s%s %s%s  %s%s · %s · %s%s  %sup %sh · boots %s%s\n" \
+  #
+  # `metered` trails the country when the dish reports treatAsMetered, matching
+  # the Go dash. Absent means "not metered" *or* "firmware too old to say" —
+  # the wire drops the field when false — so it is only ever added, never
+  # negated into a "· unmetered" that would be a claim we cannot make.
+  local metered_note=""
+  [[ "${METERED:-false}" == "true" ]] && metered_note=" · metered"
+  printf "  %sStarlink%s  %s%s %s%s  %s%s · %s · %s%s%s  %sup %s · boots %s%s\n" \
     "$C_HDR" "$R" "$dot_color" "$dot" "$C_VAL" "$STATE" \
-    "$C_DIM" "$CLASS" "$MOB" "$COUNTRY" "$R" \
-    "$C_DIM" "$up_h" "$BOOTS" "$R"
+    "$C_DIM" "$CLASS" "$MOB" "$COUNTRY" "$metered_note" "$R" \
+    "$C_DIM" "$up_str" "$BOOTS" "$R"
   printf "  %s%s · fw %s%s\n\n" "$C_DIM" "$HW" "$SW" "$R"
 
   # ---------- two-column sections ----------
@@ -594,18 +761,34 @@ dash() {
   local gps_col=$C_OK; [[ "$GPS_OK" != "true" ]] && gps_col=$C_ERR
   L+=("${C_LBL}GPS     ${R} ${gps_col}$([[ $GPS_OK == true ]] && echo ✓ || echo ✗) lock${R}  ${C_DIM}${SATS} sats${R}")
 
-  # Translate SpaceX's disablementCode into a human label
+  # Translate SpaceX's disablementCode into a human label.
+  #
+  # The cases are SpaceX.API.Satellites.Network.UtDisablementCode, read off a
+  # dish by reflection rather than guessed. This table used to carry SUSPENDED,
+  # OUT_OF_SERVICE_AREA, OUT_OF_REGION, DISABLED_BY_COMMAND,
+  # UNKNOWN_USER_TERMINAL and INVALID_HARDWARE_VERSION — none of which are in
+  # the enum, so every real outage fell through to the `*` arm and printed raw
+  # SCREAMING_CASE in warning yellow. Kept in sync with serviceStatus in dash.go
+  # by TestEveryDisableCodeHasACliPhrase, which the Go side pins; this copy has
+  # no such test, so change both together.
   local svc_str svc_col=$C_OK
   case "$DISABLE" in
-    OKAY)                   svc_str="active ✓" ;;
-    NO_ACTIVE_ACCOUNT)      svc_str="no account";          svc_col=$C_ERR ;;
-    SUSPENDED)              svc_str="suspended (billing)"; svc_col=$C_ERR ;;
-    OUT_OF_SERVICE_AREA)    svc_str="outside plan area";   svc_col=$C_ERR ;;
-    OUT_OF_REGION)          svc_str="wrong region";        svc_col=$C_ERR ;;
-    DISABLED_BY_COMMAND)    svc_str="disabled by SpaceX";  svc_col=$C_ERR ;;
-    UNKNOWN_USER_TERMINAL)  svc_str="unrecognized dish";   svc_col=$C_ERR ;;
-    INVALID_HARDWARE_VERSION) svc_str="firmware invalid";  svc_col=$C_ERR ;;
-    *)                      svc_str="$DISABLE";            svc_col=$C_WARN ;;
+    OKAY)                         svc_str="active ✓" ;;
+    NO_ACTIVE_ACCOUNT)            svc_str="no account";                    svc_col=$C_ERR ;;
+    ACCOUNT_DISABLED)             svc_str="account disabled";              svc_col=$C_ERR ;;
+    TOO_FAR_FROM_SERVICE_ADDRESS) svc_str="too far from service address";  svc_col=$C_ERR ;;
+    IN_OCEAN)                     svc_str="at sea — not covered by plan";  svc_col=$C_ERR ;;
+    ROAM_RESTRICTED)              svc_str="roaming not permitted here";    svc_col=$C_ERR ;;
+    BLOCKED_COUNTRY)              svc_str="country not licensed";          svc_col=$C_ERR ;;
+    BLOCKED_AREA)                 svc_str="area blocked";                  svc_col=$C_ERR ;;
+    CELL_IS_DISABLED)             svc_str="cell disabled here";            svc_col=$C_ERR ;;
+    DATA_OVERAGE_SANDBOX_POLICY)  svc_str="data allowance spent";          svc_col=$C_ERR ;;
+    MOVING_TOO_FAST_FOR_POLICY)   svc_str="moving too fast for plan";      svc_col=$C_ERR ;;
+    UNDER_AVIATION_FLYOVER_LIMITS) svc_str="aviation flyover limit";       svc_col=$C_ERR ;;
+    UNSUPPORTED_VERSION)          svc_str="firmware unsupported";          svc_col=$C_ERR ;;
+    UNKNOWN_LOCATION)             svc_str="location unknown";              svc_col=$C_WARN ;;
+    UNKNOWN_STATE|"?"|"")         svc_str="?";                             svc_col=$C_WARN ;;
+    *)                            svc_str="$DISABLE";                      svc_col=$C_WARN ;;
   esac
   # Current power draw (Mini exposes it only via get_history.powerIn ring).
   # PW_NOW was extracted from HIST_JSON earlier alongside the energy accumulator.
@@ -957,6 +1140,36 @@ case "$cmd" in
   speed|speedtest) speedtest_run ;;
   status)
     safe_call '{"get_status":{}}' | jq -r '
+      # The ladder from _sl_uptime_dur / state.UptimeDur, in jq because this
+      # line is built inside the filter. Three renderings of one rule; if you
+      # change one, change all three.
+      def dwcompound($maj; $mu; $min; $nu):
+        if $maj < 10 and $min > 0 then "\($maj)\($mu)\($min)\($nu)"
+        else "\($maj)\($mu)" end;
+      def dwuptime($sec):
+        # floor here, not just in the branches below. jq numbers are doubles
+        # and uptimeS arrives as a string through tonumber, so a fractional
+        # value is representable where the Go int64 makes it unthinkable, and
+        # without this the sub-minute branch was the one place that leaked it:
+        # 59.9 rendered as 59.9s while every later branch truncated.
+        # (No apostrophes in here. This whole filter is a single-quoted shell
+        # argument, so one would end the string and break the script.)
+        ((if $sec < 0 then 0 else $sec end) | floor) as $s
+        | if $s < 60 then "\($s)s"
+          else ($s / 60 | floor) as $m
+          | if $m < 60 then "\($m)m"
+            else ($m / 60 | floor) as $h
+            | if $h < 24 then dwcompound($h; "h"; $m % 60; "m")
+              else ($h / 24 | floor) as $d
+              | if $d < 30 then dwcompound($d; "d"; $h % 24; "h")
+                else ($d / 30 | floor) as $mo
+                | if $mo < 12 then dwcompound($mo; "mo"; $d % 30; "d")
+                  else dwcompound(($mo / 12 | floor); "y"; $mo % 12; "mo")
+                  end
+                end
+              end
+            end
+          end;
       .dishGetStatus as $s |
       ($s.deviceState.uptimeS | tonumber) as $up |
       ($s.obstructionStats // {}) as $o |
@@ -966,7 +1179,7 @@ case "$cmd" in
       ($s.alignmentStats // {}) as $al |
       [
         "State:        \($s.state // (if ($r | to_entries | map(.value) | all) then "CONNECTED" else "NOT READY" end))",
-        "Uptime:       \(($up/3600*10|floor)/10) h  (\($up)s, boots=\($s.deviceInfo.bootcount // "?"))",
+        "Uptime:       \(dwuptime($up))  (\($up)s, boots=\($s.deviceInfo.bootcount // "?"))",
         "Hardware:     \($s.deviceInfo.hardwareVersion)   class=\($s.classOfService // "?")   mobility=\($s.mobilityClass // "?")   country=\($s.deviceInfo.countryCode // "?")",
         "Software:     \($s.deviceInfo.softwareVersion)   swupdate=\($s.softwareUpdateState // "?")",
         "Throughput:   down \((($s.downlinkThroughputBps // 0)/1e6*100|round)/100) Mbps   up \((($s.uplinkThroughputBps // 0)/1e6*100|round)/100) Mbps",
@@ -977,7 +1190,7 @@ case "$cmd" in
         "GPS:          valid=\($g.gpsValid // false)   sats=\($g.gpsSats // 0)",
         "Ethernet:     \($s.ethSpeedMbps // 0) Mbps",
         "Ready:        \([$r | to_entries[] | "\(.key)=\(.value)"] | join(" "))",
-        "Bandwidth:    dl=\($s.dlBandwidthRestrictedReason // "?")   ul=\($s.ulBandwidthRestrictedReason // "?")   disablement=\($s.disablementCode // "?")",
+        "Bandwidth:    dl=\($s.dlBandwidthRestrictedReason // "?")   ul=\($s.ulBandwidthRestrictedReason // "?")   disablement=\($s.disablementCode // "?")   metered=\($s.treatAsMetered // false)",
         "Alerts:       \((([$a | to_entries[] | select(.value==true) | .key]) | if length==0 then "none" else join(", ") end))"
       ] | .[]'
     ;;

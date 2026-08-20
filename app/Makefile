@@ -56,6 +56,21 @@ endif
 # machine, which is what the spike needs; it is not enough to distribute.
 CODESIGN_ID ?= -
 
+# What the bundle calls itself in the UI. Derived from the signing identity
+# rather than declared, because the identity is the thing that actually decides
+# whether this bundle can leave the machine: ad-hoc cannot be notarized and
+# Gatekeeper refuses it anywhere else, so "signed with a real identity" and
+# "could be a release" are the same statement.
+#
+# Not a variable you set. `make app CHANNEL=release` on an ad-hoc build would
+# put the word "release" under a bundle that is nothing of the kind, which is
+# the exact confusion the field exists to remove — hence `override`.
+ifeq ($(CODESIGN_ID),-)
+override CHANNEL := dev
+else
+override CHANNEL := release
+endif
+
 # A secure timestamp is mandatory for notarization — a bundle signed
 # `--timestamp=none` is rejected with "The signature does not include a secure
 # timestamp", after the upload, which is a slow way to find out. It was
@@ -191,6 +206,10 @@ app:
 	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(SHORT_VER)" "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUM)" "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
+	/usr/libexec/PlistBuddy -c "Set :DWBuildChannel $(CHANNEL)" "$(CONTENTS)/Info.plist"
+	# The full `git describe`, not SHORT_VER: the commit and the -dirty flag are
+	# the only things that distinguish two bundles built from the same tag.
+	/usr/libexec/PlistBuddy -c "Set :DWSourceVersion $(VERSION)" "$(CONTENTS)/Info.plist"
 	printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	# --force because the SwiftPM binary may already carry an ad-hoc signature
 	# from the linker; without it codesign refuses rather than replacing.
@@ -210,7 +229,7 @@ app:
 	         $(TIMESTAMP) \
 	         "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
-	@echo "  $(APP_DIR)  $(SHORT_VER) ($(BUILD_NUM))  sandbox=$(SANDBOX)  id=$(CODESIGN_ID)"
+	@echo "  $(APP_DIR)  $(SHORT_VER) ($(BUILD_NUM))  sandbox=$(SANDBOX)  id=$(CODESIGN_ID)  channel=$(CHANNEL)  src=$(VERSION)"
 	@echo "  entitlements actually in the signature:"
 	@codesign -d --entitlements - --xml "$(APP_DIR)" 2>/dev/null | plutil -p - | sed 's/^/    /'
 

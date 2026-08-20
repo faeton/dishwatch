@@ -1,0 +1,83 @@
+# Cross-language golden for the uptime ladder. Three implementations render it
+# — state.UptimeDur (Go), _sl_uptime_dur (bash) and dwuptime (jq, inside `sl
+# status`) — because the Go CLI, the bash fallback and a jq program cannot
+# share code. This file is what keeps them the same rule rather than three
+# rules that happen to agree today.
+#
+# Go asserts against it in TestUptimeDurGolden; bash and jq in
+# scripts/check-uptime-parity.sh, which `make check` runs.
+#
+# Every handover point, and — at each level — a major of 5-9 with a non-zero
+# minor next to the first double-digit major. That pair is the collapse
+# threshold, and it is the number most likely to be tweaked by someone who
+# finds one of these readings too terse. Without it a table can look thorough
+# and still pass with the rule changed: the first draft of this file had
+# nothing above 3d3h, and moving the cutoff from 10 to 5 did not fail it.
+#
+# It also carries, at each level that renders NO minor unit, a case with a
+# large residual in the unit below (90 = 1m30s, 570 = 9m30s, 3570 = 59m30s).
+# Without those, a rule that starts appending the smaller unit under some
+# condition — "seconds when minutes < 10 and seconds >= 30" — passes every
+# case in the table while changing what users see.
+#
+# And, at every level, a major of exactly 10 with a NON-ZERO minor: 37800
+# (10h30m), 900000 (10d10h), 26352000 (10mo5d), 340000000 (10y11mo). A case
+# whose minor happens to be zero cannot pin this — 36000 and 36030 are both
+# 10h0m, so "collapse at 10" and "collapse at 11" render them identically.
+# That was a real hole: the first attempt at this file added 36030 believing
+# it closed the gap, and it did not.
+#
+# Format: <seconds> <want>.
+-5 0s
+0 0s
+1 1s
+45 45s
+59 59s
+60 1m
+61 1m
+90 1m
+312 5m
+570 9m
+3540 59m
+3570 59m
+3599 59m
+3600 1h
+3601 1h
+3660 1h1m
+3900 1h5m
+7200 2h
+7260 2h1m
+19800 5h30m
+35940 9h59m
+36000 10h
+36030 10h
+37800 10h
+46920 13h
+86399 23h
+86400 1d
+90000 1d1h
+100000 1d3h
+270000 3d3h
+475200 5d12h
+863940 9d23h
+864000 10d
+864030 10d
+900000 10d
+950400 11d
+2591999 29d
+2592000 1mo
+2592030 1mo
+2600000 1mo
+5000000 1mo27d
+13564800 5mo7d
+25919999 9mo29d
+25920000 10mo
+26000000 10mo
+26352000 10mo
+31103999 11mo
+31104000 1y
+40000000 1y3mo
+308448000 9y11mo
+340000000 10y
+341000000 10y
+400000000 12y

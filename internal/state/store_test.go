@@ -211,3 +211,73 @@ func TestObservedAvgWRefusesAnImpossiblePair(t *testing.T) {
 		t.Fatalf("a mean of exactly %.0f W must be allowed; the bound is a ceiling, not a limit", MaxPlausibleW)
 	}
 }
+
+// The plan diffs are the only ones in DiffAndLog whose inputs are routinely
+// missing — the bash fallback rebuilds state.json without them, and every
+// snapshot written before they existed lacks them too. So the rule that matters
+// is not "does a change get logged" but "does a *non*-change stay silent".
+func TestPlanChangeAbstainsWhenEitherSideIsUnrecorded(t *testing.T) {
+	for _, tc := range []struct{ name, prev, cur string }{
+		{"prev unrecorded (bash wrote state.json)", "", "CONSUMER"},
+		{"cur unrecorded", "CONSUMER", ""},
+		{"both unrecorded", "", ""},
+		{"unchanged", "CONSUMER", "CONSUMER"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CACHE_HOME", dir)
+			t.Setenv("HOME", dir)
+			prev := &Snapshot{TS: 100, Boots: 1, UptimeS: 100, Class: tc.prev}
+			cur := &Snapshot{TS: 120, Boots: 1, UptimeS: 120, Class: tc.cur}
+			if err := DiffAndLog(cur, prev); err != nil {
+				t.Fatalf("DiffAndLog: %v", err)
+			}
+			lines, _ := TailEvents(50)
+			for _, l := range lines {
+				if strings.Contains(l, "PLAN") {
+					t.Errorf("logged a plan change from %q→%q: %s", tc.prev, tc.cur, l)
+				}
+			}
+		})
+	}
+}
+
+// And the change that is real does land — including metered, which is the
+// field the whole thing was added for. `false`→`true` is a genuine transition
+// precisely because dash.go records the bool unconditionally rather than
+// letting the wire's omit-when-false reach the snapshot as "".
+func TestPlanChangeLogsRealTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		prev, cur  Snapshot
+	}{
+		{"class", "CLASS CONSUMER → BUSINESS",
+			Snapshot{Class: "CONSUMER"}, Snapshot{Class: "BUSINESS"}},
+		{"mobility", "MOBILITY NOMADIC → MOBILE",
+			Snapshot{Mobility: "NOMADIC"}, Snapshot{Mobility: "MOBILE"}},
+		{"metered", "METERED false → true",
+			Snapshot{Metered: "false"}, Snapshot{Metered: "true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("XDG_CACHE_HOME", dir)
+			t.Setenv("HOME", dir)
+			prev, cur := tc.prev, tc.cur
+			prev.TS, prev.Boots, prev.UptimeS = 100, 1, 100
+			cur.TS, cur.Boots, cur.UptimeS = 120, 1, 120
+			if err := DiffAndLog(&cur, &prev); err != nil {
+				t.Fatalf("DiffAndLog: %v", err)
+			}
+			lines, _ := TailEvents(50)
+			found := false
+			for _, l := range lines {
+				if strings.Contains(l, tc.want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no PLAN line matching %q in %v", tc.want, lines)
+			}
+		})
+	}
+}

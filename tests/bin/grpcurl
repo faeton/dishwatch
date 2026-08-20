@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# A grpcurl that answers from tests/fixtures/ instead of a dish.
+#
+# `sl` funnels every RPC through one function — `call() { grpcurl -plaintext
+# -max-time 4 -d "$1" "$DISH" "$SVC"; }` — so putting this first in PATH is
+# enough to drive the real script end to end with no network and no hardware.
+# That is what makes it possible to assert what `sl` RENDERS rather than what
+# its ladder functions return in isolation.
+set -uo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+req=""
+while [ $# -gt 0 ]; do
+  case "$1" in -d) req="${2-}"; shift 2;; *) shift;; esac
+done
+case "$req" in
+  *get_status*)  cat "$here/fixtures/get_status.json";;
+  *get_history*) cat "$here/fixtures/get_history.json";;
+  # The real dish answers Unimplemented (grpcurl exit 71) for this one, and
+  # `sl` relies on that failing rather than returning empty-but-successful.
+  *get_location*) echo "fixture grpcurl: get_location unimplemented" >&2; exit 71;;
+  # Anything else: behave like a dish that does not implement it, so a caller
+  # that grows a new RPC fails loudly here instead of silently reading {}.
+  *) echo "fixture grpcurl: no fixture for request: $req" >&2; exit 1;;
+esac

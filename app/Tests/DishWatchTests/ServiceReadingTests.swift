@@ -100,4 +100,108 @@ final class ServiceReadingTests: XCTestCase {
         XCTAssertEqual(d.serviceMobility, .unknown)
         XCTAssertNil(d.serviceLine)
     }
+
+    // MARK: - Metering
+
+    /// The cap clause trails the class the same way the mobility one does, and
+    /// comes last: it is a property of the plan, not of the dish's permissions.
+    func testMeteredTrailsTheServiceLine() {
+        var d = data(.consumer, .mobile)
+        d.metered = true
+        XCTAssertEqual(d.serviceLine, "Consumer · cleared to use in motion · metered")
+    }
+
+    /// A dish can report a cap without reporting a class — `classOfService` has
+    /// an explicit UNKNOWN and `mobilityClass` drops its zero value, while
+    /// `treatAsMetered` is independent of both. When it leads it has to be
+    /// capitalised, like the mobility clause does.
+    func testMeteredAloneStillDrawsALine() {
+        var d = DishData()
+        d.metered = true
+        XCTAssertEqual(d.serviceLine, "Metered")
+    }
+
+    /// The absent case must stay silent. `treatAsMetered` is omitted from the
+    /// wire when false, so an unmetered dish and firmware too old to have the
+    /// field are indistinguishable — and neither is grounds for the panel to
+    /// state that a connection is uncapped.
+    func testUnmeteredClaimsNothing() {
+        let d = data(.consumer, .mobile)
+        XCTAssertEqual(d.serviceLine, "Consumer · cleared to use in motion")
+        let why = d.serviceExplanation ?? ""
+        XCTAssertFalse(why.localizedCaseInsensitiveContains("metered"))
+    }
+
+    /// The explanation has to say the one thing the dish cannot: it reports
+    /// *that* the link is metered and never how much allowance is left. Someone
+    /// rationing data on a crossing will read this line as a budget if it does
+    /// not say otherwise.
+    func testMeteredExplanationRefusesToImplyARemainingAllowance() throws {
+        var d = data(.consumer, .mobile)
+        d.metered = true
+        let why = try XCTUnwrap(d.serviceExplanation)
+        XCTAssertTrue(why.localizedCaseInsensitiveContains("metered"))
+        XCTAssertTrue(why.localizedCaseInsensitiveContains("does not report how much"))
+    }
+
+    // MARK: - Disablement
+
+    /// Every token dashboard.go can emit needs a phrase here, or the panel says
+    /// "Disabled" and nothing else for an outage it could have explained.
+    func testEveryDisableCaseHasAPhrase() {
+        for c in [ServiceDisable.noAccount, .accountDisabled, .tooFarFromServiceAddress,
+                  .inOcean, .roamRestricted, .blockedCountry, .blockedArea,
+                  .cellDisabled, .dataOverage, .movingTooFast, .aviationFlyoverLimit,
+                  .unsupportedVersion, .unknownLocation] {
+            XCTAssertFalse(c.label.isEmpty, "\(c) has no phrase")
+        }
+    }
+
+    /// `.none` is the healthy dish, and it must draw nothing at all — a cause
+    /// line on a connected panel is worse than a missing one.
+    func testWorkingDishHasNoBlockedReason() {
+        XCTAssertNil(DishData().serviceBlockedReason)
+        XCTAssertTrue(ServiceDisable.none.label.isEmpty)
+    }
+
+    /// The wire tokens, spelled as dashboard.go emits them. This is the pair of
+    /// hand-maintained tables either side of the process boundary, so the test
+    /// has to name the strings rather than round-trip the enum against itself.
+    func testDisableTokensDecodeFromTheWire() throws {
+        for (token, want) in [("inOcean", ServiceDisable.inOcean),
+                              ("roamRestricted", .roamRestricted),
+                              ("dataOverage", .dataOverage),
+                              ("movingTooFast", .movingTooFast)] {
+            let json = """
+            {"schemaVersion":1,"state":"Disabled","serviceDisable":"\(token)"}
+            """
+            let d = try JSONDecoder().decode(DishData.self, from: Data(json.utf8))
+            XCTAssertEqual(d.serviceDisable, want)
+            XCTAssertNotNil(d.serviceBlockedReason)
+        }
+    }
+
+    /// A cause newer than this build degrades to silence without taking the
+    /// snapshot with it. The state still reads "Disabled", so the outage is
+    /// never concealed — only its reason goes unstated.
+    func testUnknownDisableCodeDegradesToSilenceNotFailure() throws {
+        let json = """
+        {"schemaVersion":1,"state":"Disabled","serviceDisable":"eatenByKraken"}
+        """
+        let d = try JSONDecoder().decode(DishData.self, from: Data(json.utf8))
+        XCTAssertEqual(d.serviceDisable, .none)
+        XCTAssertNil(d.serviceBlockedReason)
+        XCTAssertEqual(d.state, .disabled)
+    }
+
+    /// The cause must not be folded into the hero word. `CompactWidget` and the
+    /// menu-bar tooltip both reuse `stateLabel` verbatim in slots sized for one
+    /// word, and a clause there truncates mid-sentence.
+    func testBlockedReasonStaysOutOfTheStateLabel() {
+        var d = DishData()
+        d.state = .disabled
+        d.serviceDisable = .inOcean
+        XCTAssertEqual(d.stateLabel, "Disabled")
+        XCTAssertNotNil(d.serviceBlockedReason)
+    }
 }

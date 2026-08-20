@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/faeton/dishwatch/internal/state"
 )
 
 func runStatus(ctx context.Context) error {
@@ -18,6 +20,10 @@ func runStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Resolved before `state` shadows the package for the rest of this
+	// function — the same trap the dash header hit.
+	upStr := state.UptimeDur(s.DeviceState.UptimeS)
 
 	state := s.State
 	if state == "" {
@@ -36,7 +42,10 @@ func runStatus(ctx context.Context) error {
 	timeObsPct := s.ObstructionStats.TimeObstructed * 100
 
 	fmt.Printf("State:        %s\n", state)
-	fmt.Printf("Uptime:       %.1f h  (%ds, boots=%d)\n", float64(uptime)/3600, uptime, s.DeviceInfo.Bootcount)
+	// The same ladder the dash header and the app panel use — 0.6 h told you
+	// less than the raw seconds beside it already did. Those stay: this is a
+	// dump, and the ladder rounds.
+	fmt.Printf("Uptime:       %s  (%ds, boots=%d)\n", upStr, uptime, s.DeviceInfo.Bootcount)
 	fmt.Printf("Hardware:     %s%s   class=%s   mobility=%s   country=%s\n",
 		s.DeviceInfo.HardwareVersion, hardwareNote(s.DeviceInfo.HardwareVersion),
 		dashIf(s.ClassOfService),
@@ -55,9 +64,9 @@ func runStatus(ctx context.Context) error {
 	fmt.Printf("GPS:          valid=%t   sats=%d\n", s.GpsStats.GpsValid, s.GpsStats.GpsSats)
 	fmt.Printf("Ethernet:     %d Mbps\n", s.EthSpeedMbps)
 	fmt.Printf("Ready:        %s\n", joinMap(s.ReadyStates))
-	fmt.Printf("Bandwidth:    dl=%s   ul=%s   disablement=%s\n",
+	fmt.Printf("Bandwidth:    dl=%s   ul=%s   disablement=%s   metered=%t\n",
 		dashIf(s.DlBandwidthRestricted), dashIf(s.UlBandwidthRestricted),
-		dashIf(s.DisablementCode))
+		dashIf(s.DisablementCode), s.TreatAsMetered)
 	fmt.Printf("Alerts:       %s\n", joinActiveAlerts(s.Alerts))
 	return nil
 }

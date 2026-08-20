@@ -68,8 +68,29 @@ type Dashboard struct {
 	//     no such field both arrive as "". We therefore claim nothing rather
 	//     than defaulting to "fixed location" — which would be right most of the
 	//     time and a false statement about the dish's own report the rest of it.
-	ServiceClass      string  `json:"serviceClass"`
-	ServiceMobility   string  `json:"serviceMobility"`
+	ServiceClass    string `json:"serviceClass"`
+	ServiceMobility string `json:"serviceMobility"`
+	// Whether the dish says the link is capped — `treatAsMetered` on the wire.
+	//
+	// The one field here that speaks to cost rather than capability, which is
+	// also why it is a bool and not a token: the dish reports that the
+	// connection is metered, never by how much or how much is left. Anything
+	// resembling a remaining-allowance figure would have to be invented.
+	//
+	// false covers "not metered" and "firmware too old to say" alike; see
+	// dish.Status.TreatAsMetered. Surfaces must not read it as a guarantee.
+	Metered bool `json:"metered"`
+	// Why the dish is refusing service, normalized off `disablementCode`
+	// (`UtDisablementCode`). "" when the dish is OKAY — i.e. the field is
+	// present precisely when State is "Disabled", and says the thing State
+	// cannot: a dish blocked because it is over the ocean and one blocked
+	// because the account lapsed both read "Disabled" without it.
+	//
+	// Tokens for the same reason ServiceClass is: SpaceX both renames and
+	// extends this enum, and an unrecognized code lands on "" rather than being
+	// guessed at. That loses the reason, which is bad, but stating the wrong
+	// reason for someone's outage is worse.
+	ServiceDisable    string  `json:"serviceDisable"`
 	DownMbps          float64 `json:"downMbps"`
 	UpMbps            float64 `json:"upMbps"`
 	PingMs            float64 `json:"pingMs"`
@@ -275,6 +296,8 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 		Firmware:        trimFirmware(s.DeviceInfo.SoftwareVersion),
 		ServiceClass:    serviceClass(s.ClassOfService),
 		ServiceMobility: serviceMobility(s.MobilityClass),
+		Metered:         s.TreatAsMetered,
+		ServiceDisable:  serviceDisable(s.DisablementCode),
 		DownMbps:        round1(s.DownlinkThroughputBps / 1e6),
 		UpMbps:          round1(s.UplinkThroughputBps / 1e6),
 		PingMs:          round1(s.PopPingLatencyMs),
@@ -471,6 +494,67 @@ func serviceMobility(v string) string {
 		return mobMobile
 	default:
 		return mobUnknown
+	}
+}
+
+// Tokens for Dashboard.ServiceDisable, one per UtDisablementCode that stops
+// service. OKAY has none: "not disabled" is the absence of a reason, not a
+// reason whose name is "okay", and giving it a token would let a surface render
+// a cause line on a working dish.
+const (
+	disNone           = ""
+	disNoAccount      = "noAccount"
+	disAccountOff     = "accountDisabled"
+	disTooFarFromAddr = "tooFarFromServiceAddress"
+	disInOcean        = "inOcean"
+	disRoamRestricted = "roamRestricted"
+	disBlockedCountry = "blockedCountry"
+	disBlockedArea    = "blockedArea"
+	disCellDisabled   = "cellDisabled"
+	disDataOverage    = "dataOverage"
+	disMovingTooFast  = "movingTooFast"
+	disAviationLimit  = "aviationFlyoverLimit"
+	disUnsupportedFW  = "unsupportedVersion"
+	disUnknownLoc     = "unknownLocation"
+)
+
+// serviceDisable maps `UtDisablementCode` onto our tokens.
+//
+// Both "" and "OKAY" mean no reason to report, from opposite directions: OKAY
+// is the dish saying service is fine, "" is a dish that said nothing at all
+// (offline, or firmware without the field). Neither should produce a cause, so
+// neither gets one — and the default arm gives an unrecognized future code the
+// same silence, because naming it would mean guessing.
+func serviceDisable(v string) string {
+	switch v {
+	case "NO_ACTIVE_ACCOUNT":
+		return disNoAccount
+	case "ACCOUNT_DISABLED":
+		return disAccountOff
+	case "TOO_FAR_FROM_SERVICE_ADDRESS":
+		return disTooFarFromAddr
+	case "IN_OCEAN":
+		return disInOcean
+	case "ROAM_RESTRICTED":
+		return disRoamRestricted
+	case "BLOCKED_COUNTRY":
+		return disBlockedCountry
+	case "BLOCKED_AREA":
+		return disBlockedArea
+	case "CELL_IS_DISABLED":
+		return disCellDisabled
+	case "DATA_OVERAGE_SANDBOX_POLICY":
+		return disDataOverage
+	case "MOVING_TOO_FAST_FOR_POLICY":
+		return disMovingTooFast
+	case "UNDER_AVIATION_FLYOVER_LIMITS":
+		return disAviationLimit
+	case "UNSUPPORTED_VERSION":
+		return disUnsupportedFW
+	case "UNKNOWN_LOCATION":
+		return disUnknownLoc
+	default:
+		return disNone
 	}
 }
 

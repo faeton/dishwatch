@@ -32,6 +32,21 @@
 	<string>0.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>0</string>
+	<!-- What kind of build this is, and which tree it came from. Both are
+	     placeholders here and rewritten by `make app`, same as the two version
+	     keys above.
+
+	     They exist because CFBundleShortVersionString cannot answer the
+	     question they answer. It is derived by stripping git describe down to
+	     dotted digits, so a locally-built test bundle and the notarized cask
+	     release cut from the same tag both report "0.2.7" — identical in the
+	     footer, in Settings, and in Finder. DWBuildChannel is the only field
+	     that separates them, and DWSourceVersion is the only one that says
+	     which commit, and whether the tree was clean. -->
+	<key>DWBuildChannel</key>
+	<string>unknown</string>
+	<key>DWSourceVersion</key>
+	<string>0.0.0</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>

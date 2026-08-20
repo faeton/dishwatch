@@ -2,3 +2,9 @@
 *.swp
 bin/
 dist/
+
+# The fixture grpcurl shim is source, not a build artifact — the `bin/`
+# rule above would otherwise drop it and make `make check` unrunnable on a
+# fresh clone.
+!tests/bin/
+!tests/bin/*

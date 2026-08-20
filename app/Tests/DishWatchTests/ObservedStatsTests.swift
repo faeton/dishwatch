@@ -179,6 +179,16 @@ final class GoldenFixtureTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(o.seconds, ObservedStats.minSeconds)
         XCTAssertGreaterThan(o.pingAvg, 0)
         XCTAssertEqual(o.cleanPct + o.degradedPct + o.darkPct, 100, accuracy: 0.5)
+
+        // This capture predates `metered` and `serviceDisable`, which makes it
+        // the only test that exercises the case those two fields will spend
+        // most of their life in: a helper older than the app. Both must land on
+        // the silent default rather than on anything the panel would draw —
+        // an old helper must never make a connected dish claim it is capped,
+        // and must never invent a reason for an outage that is not happening.
+        XCTAssertFalse(d.metered, "an absent treatAsMetered is not a claim that the link is uncapped")
+        XCTAssertEqual(d.serviceDisable, .none)
+        XCTAssertNil(d.serviceBlockedReason)
     }
 }
 

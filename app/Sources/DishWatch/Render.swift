@@ -45,7 +45,15 @@ enum Render {
         store.menuBarFields = AppState.defaultFields
         var battery = DishData.sample; battery.onBattery = true; battery.bankAnchored = true
 
-        snap(ConnectedPopover(d: store.data, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
+        // A release bundle's footer: version only, the short form.
+        let releaseBuild = BuildInfo(shortVersion: "0.2.7", buildNumber: "89",
+                                     channel: .release, sourceVersion: "v0.2.7")
+        // And the long one — a dirty local build off a tag, which is the widest
+        // this label ever gets and the case that decides whether the footer
+        // still fits an IP, a status phrase and the Pin button.
+        let devBuild = BuildInfo(shortVersion: "0.2.7", buildNumber: "89",
+                                 channel: .dev, sourceVersion: "v0.2.7-1-gcdd29ad-dirty")
+        snap(ConnectedPopover(d: store.data, showSettings: .constant(false), build: releaseBuild).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "connected")
         // The panel at its *widest* identity, which is the ordinary one.
         // `DishData.sample` carries `Mini` and `mini1_panda` — shorter than
         // anything a real dish reports — and that is why the hardware chip
@@ -65,7 +73,7 @@ enum Render {
         // and is longer than either.
         long.serviceClass = .businessPlus
         long.serviceMobility = .mobile
-        snap(ConnectedPopover(d: long, showSettings: .constant(false)).environmentObject(store)
+        snap(ConnectedPopover(d: long, showSettings: .constant(false), build: devBuild).environmentObject(store)
                 .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "connected-long")
         // And at its *emptiest* identity: `"?"` is what DishData defaults to and
@@ -74,6 +82,20 @@ enum Render {
         // as "takes no space" — padding applied to an absent view at the call
         // site is still padding, and the failure it produces is a blank band
         // that no assertion would catch and no other shot would show.
+        // The state this build was cut for: service stopped, with a cause. The
+        // hero grows a wrapped red clause under a one-word label, and the
+        // service line grows a `· metered` tail — two additions in the same
+        // column, neither of which any other case draws. `inOcean` is the
+        // longest phrase in `ServiceDisable`, so this is also the wrap test.
+        var blocked = DishData.sample
+        blocked.state = .disabled
+        blocked.serviceDisable = .inOcean
+        blocked.metered = true
+        blocked.serviceClass = .businessPlus
+        blocked.serviceMobility = .mobile
+        snap(ConnectedPopover(d: blocked, showSettings: .constant(false), build: devBuild).environmentObject(store)
+                .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+             dir, "connected-blocked")
         var unknown = DishData.sample
         unknown.hardwareShort = "?"
         unknown.hardwareAim = .unknown

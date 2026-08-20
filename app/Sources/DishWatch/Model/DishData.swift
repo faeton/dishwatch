@@ -126,6 +126,59 @@ enum ServiceMobility: String, Decodable, Sendable {
     }
 }
 
+/// Why the dish is refusing to carry traffic — `serviceDisable` on the wire,
+/// normalized from `UtDisablementCode` by dashboard.go.
+///
+/// Separate from `LinkState.disabled`, which says only *that* service stopped.
+/// The distinction is the whole value of this type: a dish blocked because the
+/// boat crossed into open ocean and one blocked because the card on the account
+/// expired are the same `LinkState` and require opposite responses from the
+/// owner.
+///
+/// `.none` is "no reason to give", which covers a healthy dish, an offline one,
+/// and a code newer than this build — dashboard.go maps all three to "" rather
+/// than guessing at a cause. See its `serviceDisable` note for why an
+/// unrecognized code is better shown as nothing than as the wrong reason.
+enum ServiceDisable: String, Decodable, Sendable {
+    case none = ""
+    case noAccount
+    case accountDisabled
+    case tooFarFromServiceAddress
+    case inOcean
+    case roamRestricted
+    case blockedCountry
+    case blockedArea
+    case cellDisabled
+    case dataOverage
+    case movingTooFast
+    case aviationFlyoverLimit
+    case unsupportedVersion
+    case unknownLocation
+
+    /// A short phrase for the line under the hero. Written as the *cause*, not
+    /// as an instruction: the panel cannot know whether the fix is to buy data,
+    /// sail back inshore, or wait, and inventing an imperative would send some
+    /// owners the wrong way.
+    var label: String {
+        switch self {
+        case .none:                     return ""
+        case .noAccount:                return "no active account"
+        case .accountDisabled:          return "account disabled"
+        case .tooFarFromServiceAddress: return "too far from the service address"
+        case .inOcean:                  return "over open ocean, which this plan does not cover"
+        case .roamRestricted:           return "roaming is not permitted at this location"
+        case .blockedCountry:           return "service is not licensed in this country"
+        case .blockedArea:              return "this area is blocked"
+        case .cellDisabled:             return "this cell is switched off"
+        case .dataOverage:              return "the data allowance on this plan is spent"
+        case .movingTooFast:            return "moving faster than the plan allows"
+        case .aviationFlyoverLimit:     return "under aviation flyover limits"
+        case .unsupportedVersion:       return "the dish firmware is not supported"
+        case .unknownLocation:          return "the dish cannot establish where it is"
+        }
+    }
+}
+
 /// One snapshot of dish + power state. Mirrors the Go `Dashboard` DTO emitted by
 /// `dishwatch json` — see dashboard.go.
 ///
@@ -145,6 +198,13 @@ struct DishData: Decodable, Sendable, Equatable {
 
     // identity
     var uptimeHours: Double = 0
+
+    /// Uptime in seconds. The wire carries hours as an unrounded float
+    /// (`float64(UptimeS) / 3600` in dashboard.go), so seconds come back intact
+    /// and the readout can resolve a dish that booted a minute ago — no schema
+    /// widening needed, which matters because the app rejects any snapshot whose
+    /// `schemaVersion` isn't an exact match.
+    var uptimeSeconds: Int64 { Int64((uptimeHours * 3600).rounded()) }
     var boots: Int = 0
     var hardwareShort: String = "?"
     var hardwareAim: DishAim = .unknown
@@ -152,6 +212,11 @@ struct DishData: Decodable, Sendable, Equatable {
     var firmware: String = ""
     var serviceClass: ServiceClass = .unknown
     var serviceMobility: ServiceMobility = .unknown
+    /// Whether the dish reports the link as capped. `false` is also "firmware
+    /// too old to say" — see the Go `Dashboard.Metered` note. Never render it
+    /// as a promise that the connection is uncapped.
+    var metered: Bool = false
+    var serviceDisable: ServiceDisable = .none
 
     // throughput / link
     var downMbps: Double = 0
@@ -229,7 +294,12 @@ struct DishData: Decodable, Sendable, Equatable {
     /// answer to "we do not know" and the only one available for "we cannot
     /// tell those two apart".
     var serviceLine: String? {
-        let parts = [serviceClass.label, serviceMobility.label].filter { !$0.isEmpty }
+        var parts = [serviceClass.label, serviceMobility.label].filter { !$0.isEmpty }
+        // Lower case, and last, because it is the same kind of clause the
+        // mobility labels are — and because it is the half most likely to be
+        // true when the other two are not: a dish can report a cap without
+        // reporting a class, and "Metered" alone is still worth a line.
+        if metered { parts.append("metered") }
         guard let first = parts.first else { return nil }
         // The mobility labels are written lower case, as a clause trailing the
         // class. Firmware that reports mobility and no class leaves one leading
@@ -250,8 +320,29 @@ struct DishData: Decodable, Sendable, Equatable {
     var serviceExplanation: String? {
         guard serviceLine != nil else { return nil }
         let caveat = "This is the service class the dish reports for itself, not the plan name on your bill — the dish is never told that."
+        // Stated before the caveat because it is the actionable half, and
+        // stated as a bare fact: the dish reports *that* the link is metered
+        // and never how much allowance is left, so any figure here would be
+        // invented. Someone watching a data budget is owed that limit up front.
+        let cap = metered
+            ? "The dish reports this connection as metered, so traffic on it is counted against an allowance. It does not report how much of that allowance remains."
+            : ""
         let what = serviceMobility.explanation
-        return what.isEmpty ? caveat : "\(what) \(caveat)"
+        return [what, cap, caveat].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// Why service stopped, for the line under the hero — `nil` whenever the
+    /// dish is carrying traffic, or is disabled for a reason this build cannot
+    /// name.
+    ///
+    /// Deliberately not folded into `stateLabel`. The hero is a glanceable word
+    /// that other views (`CompactWidget`, the menu-bar tooltip) reuse verbatim,
+    /// and a cause is a sentence; concatenating them would push a phrase like
+    /// "over open ocean, which this plan does not cover" into a 15 pt bold slot
+    /// sized for "Disabled".
+    var serviceBlockedReason: String? {
+        let label = serviceDisable.label
+        return label.isEmpty ? nil : label
     }
 
     /// Compact "Xh Ym" / "Ym" string for time-to-empty, or "—" when there is
@@ -445,7 +536,7 @@ extension DishData {
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case state, signalScore, uptimeHours, boots, hardwareShort, hardwareAim, deviceId, firmware
-        case serviceClass, serviceMobility
+        case serviceClass, serviceMobility, metered, serviceDisable
         case downMbps, upMbps, pingMs, dropPct, noiseOK, downBarFrac, upBarFrac
         case azimuthDeg, elevationDeg, gpsValid, gpsSats, ethMbps, powerW, energyWhSinceBoot
         case energyCoversBoot, energySeconds, energyAvgW
@@ -499,6 +590,13 @@ extension DishData {
         // whole snapshot, and it is certainly not a reason to name it wrongly.
         d.serviceClass = s(.serviceClass, d.serviceClass)
         d.serviceMobility = s(.serviceMobility, d.serviceMobility)
+        d.metered = s(.metered, d.metered)
+        // Lenient for the third time and the same reason: SpaceX extends
+        // `UtDisablementCode`, so a cause this build cannot name falls back to
+        // `.none` and renders nothing. The state still reads "Disabled", so the
+        // outage is never hidden — only its reason goes unstated, which is the
+        // honest outcome when we do not have one.
+        d.serviceDisable = s(.serviceDisable, d.serviceDisable)
         d.downMbps = s(.downMbps, d.downMbps)
         d.upMbps = s(.upMbps, d.upMbps)
         d.pingMs = s(.pingMs, d.pingMs)

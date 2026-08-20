@@ -1,0 +1,120 @@
+{
+  "apiVersion": "42",
+  "dishGetStatus": {
+    "deviceInfo": {
+      "id": "ut01000000-00000000-0000fixt",
+      "hardwareVersion": "rev3_proto2",
+      "softwareVersion": "2026.08.10.mr84226",
+      "countryCode": "GL",
+      "utcOffsetS": 0,
+      "bootcount": 1343,
+      "generationNumber": "1786485990",
+      "buildId": "a7577302-ffde-428c-865f-8b9a48784a5d.uterm_manifest.release"
+    },
+    "deviceState": {
+      "uptimeS": "3900"
+    },
+    "secondsToFirstNonemptySlot": 1.7872223E+9,
+    "obstructionStats": {
+      "fractionObstructed": 0.0012360939,
+      "validS": 6909,
+      "avgProlongedObstructionIntervalS": "NaN",
+      "timeObstructed": 0.0011144045,
+      "patchesValid": 3236
+    },
+    "alerts": {
+      "obstructionMapReset": true
+    },
+    "downlinkThroughputBps": 7415655.5,
+    "uplinkThroughputBps": 87174.414,
+    "popPingLatencyMs": 44.466187,
+    "boresightAzimuthDeg": -173.2044,
+    "boresightElevationDeg": 80.16338,
+    "gpsStats": {
+      "gpsValid": true,
+      "gpsSats": 17,
+      "pntFilterConvergenceState": "FILTER_CONVERGED"
+    },
+    "ethSpeedMbps": 1000,
+    "mobilityClass": "MOBILE",
+    "isSnrAboveNoiseFloor": true,
+    "readyStates": {
+      "cady": true,
+      "scp": true,
+      "l1l2": true,
+      "xphy": true,
+      "aap": true,
+      "rf": true
+    },
+    "classOfService": "CONSUMER",
+    "softwareUpdateState": "IDLE",
+    "hasActuators": "HAS_ACTUATORS_YES",
+    "disablementCode": "OKAY",
+    "hasSignedCals": true,
+    "softwareUpdateStats": {
+      "softwareUpdateState": "IDLE"
+    },
+    "alignmentStats": {
+      "hasActuators": "HAS_ACTUATORS_YES",
+      "tiltAngleDeg": 10.603847,
+      "boresightAzimuthDeg": -173.2044,
+      "boresightElevationDeg": 80.16338,
+      "attitudeEstimationState": "FILTER_CONVERGED",
+      "attitudeUncertaintyDeg": 0.6171081,
+      "desiredBoresightAzimuthDeg": 0.01373576,
+      "desiredBoresightElevationDeg": 71.97121
+    },
+    "initializationDurationSeconds": {
+      "attitudeInitialization": 41,
+      "burstDetected": 33,
+      "ekfConverged": 100,
+      "firstCplane": 36,
+      "firstPopPing": 43,
+      "gpsValid": 29,
+      "initialNetworkEntry": 33,
+      "networkSchedule": 37,
+      "rfReady": 30,
+      "stableConnection": 141
+    },
+    "secondsUntilSwupdateRebootPossible": -1,
+    "connectedRouters": [
+      "Router-010000000000000000EC00E8"
+    ],
+    "plcStats": {
+      "port1Stats": {},
+      "port2Stats": {},
+      "port3Stats": {}
+    },
+    "upsuStats": {},
+    "dlBandwidthRestrictedReason": "NO_LIMIT",
+    "ulBandwidthRestrictedReason": "NO_LIMIT",
+    "apsStats": {},
+    "ned2dishQuaternion": {
+      "qScalar": -0.07986696,
+      "qX": -0.46954507,
+      "qY": 0.87873596,
+      "qZ": 0.031173902
+    },
+    "downstreamRouters": {
+      "Router-010000000000000000EC00E8": {
+        "role": "CONTROLLER",
+        "lastSeen": "1787229787990101704"
+      }
+    },
+    "accountShard": "ACCOUNT_SHARD_DEFAULT",
+    "natFlag": "NAT_DISABLED",
+    "batteryStats": {},
+    "config": {
+      "swupdateRebootHour": 3,
+      "applySnowMeltMode": true,
+      "applyLocationRequestMode": true,
+      "applyLevelDishMode": true,
+      "applyPowerSaveStartMinutes": true,
+      "applyPowerSaveDurationMinutes": true,
+      "applyPowerSaveMode": true,
+      "applySwupdateThreeDayDeferralEnabled": true,
+      "applyAssetClass": true,
+      "applySwupdateRebootHour": true
+    }
+  }
+}
