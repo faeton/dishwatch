@@ -110,6 +110,40 @@ enum Render {
         snap(ConnectedPopover(d: unknown, showSettings: .constant(false)).environmentObject(store)
                 .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
              dir, "connected-unknown")
+        // The detail row, open, in each of the exit reading's four states.
+        //
+        // These are the only shots of the expanded row at all — see
+        // `ConnectedPopover.init(startExpanded:)`. It is three stacked
+        // paragraphs behind a disclosure triangle, which is both the most
+        // wrap-prone content on the panel and the least visible, and until now
+        // no snapshot could reach it.
+        //
+        // A *sample* Starlink answer and a *sample* foreign one, not a live
+        // lookup: the harness must not open a socket to anyone, least of all
+        // to the one host this app asks permission to contact.
+        let starlink = Egress(ip: "217.142.20.123", family: "v4", countryCode: "GB",
+                              asn: Egress.starlinkASN,
+                              asOrg: "SPACEX-STARLINK - Space Exploration Technologies Corporation, US",
+                              reverse: "customer.lndngbr1.isp.starlink.com", viaVPN: false)
+        // The reading the feature exists for: a healthy dish on screen and a
+        // Mac whose packets are going somewhere else entirely. Also the widest
+        // case, since the caution wraps to three lines.
+        let elsewhere = Egress(ip: "82.132.44.9", family: "v4", countryCode: "GB", asn: 5378,
+                               asOrg: "VODAFONE-LTD - Vodafone Limited, GB",
+                               reverse: nil, viaVPN: false)
+        for (name, state) in [
+            ("exit-untried", AppState.EgressState.untried),
+            ("exit-ok", .ok(starlink, at: Date().addingTimeInterval(-92))),
+            ("exit-elsewhere", .ok(elsewhere, at: Date().addingTimeInterval(-8))),
+            ("exit-failed", .failed("the server did not answer in time")),
+        ] {
+            store.seed(egress: state)
+            snap(ConnectedPopover(d: long, showSettings: .constant(false), build: devBuild,
+                                  startExpanded: true).environmentObject(store)
+                    .frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark),
+                 dir, "connected-\(name)")
+        }
+        store.seed(egress: .untried)
         snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
         snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
         snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")

@@ -44,6 +44,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        // DISHWATCH_EGRESS=1 → one real exit lookup, print, exit.
+        //
+        // The unit tests cover the decode against captured documents, which is
+        // the half that breaks silently. This covers the half that breaks
+        // loudly and cannot be faked: that the request goes out, that the
+        // service still answers the shape we parse, and that the User-Agent is
+        // the one we promised its operator we would send.
+        //
+        // It is the *only* thing in this app that contacts a third party, so a
+        // one-line way to run it deliberately — instead of clicking through a
+        // panel — is worth the six lines it costs.
+        if ProcessInfo.processInfo.environment["DISHWATCH_EGRESS"] != nil {
+            Task { @MainActor in
+                let url = EgressLookup.endpoint(.standard)
+                FileHandle.standardError.write(Data("EGRESS GET \(url) ua=\(EgressLookup.userAgent)\n".utf8))
+                do {
+                    let e = try await EgressLookup.fetch(from: url)
+                    FileHandle.standardError.write(Data("EGRESS OK  \(e.summary)\n           \(e.detail)\n           caution=\(e.caution ?? "none")\n".utf8))
+                } catch {
+                    FileHandle.standardError.write(Data("EGRESS ERR \(EgressLookup.message(for: error))\n".utf8))
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
         // DISHWATCH_PROBE=1 → poll once, print, exit. Verifies that the real
         // helper decodes into DishData end-to-end.
         if ProcessInfo.processInfo.environment["DISHWATCH_PROBE"] != nil {

@@ -70,6 +70,24 @@ final class AppState: ObservableObject {
     @Published var simulateBattery: Bool {
         didSet { Task { await refresh() } }
     }
+    /// Check the exit address whenever the panel opens, instead of only when
+    /// the user presses the button.
+    ///
+    /// **Off by default, and this is the one setting where the default is a
+    /// promise rather than a preference.** Every other control here changes how
+    /// something is drawn. This one decides whether the app contacts a server
+    /// that is not the dish — which is a claim `Info.plist`'s Local Network
+    /// string makes to the user and to App Review, so the shipped default has
+    /// to be the one that keeps it true without qualification.
+    @Published var egressAuto: Bool {
+        didSet {
+            defaults.set(egressAuto, forKey: "egressAuto")
+            // Turning it on is itself a request. Waiting for the next panel
+            // open would leave the row reading "not checked" directly under a
+            // switch the user just moved, which reads as a broken setting.
+            if egressAuto && !oldValue { checkEgress(force: false) }
+        }
+    }
     /// Why the last launch-at-login change didn't take, if it didn't.
     @Published private(set) var launchAtLoginError: String?
     private var applyingLaunchAtLogin = false
@@ -128,12 +146,13 @@ final class AppState: ObservableObject {
         self.launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? false
         self.refreshInterval = defaults.object(forKey: "refresh") as? Int ?? 1
         self.colorThroughput = defaults.object(forKey: "colorThroughput") as? Bool ?? false
+        self.egressAuto = defaults.object(forKey: "egressAuto") as? Bool ?? false
         self.simulateBattery = false
         restartPolling()
         pinnedController.setVisible(pinnedWidget)
     }
 
-    deinit { pollTask?.cancel() }
+    deinit { pollTask?.cancel(); egressTask?.cancel() }
 
     // MARK: - menu-bar settings
 
@@ -440,6 +459,80 @@ final class AppState: ObservableObject {
         }
         await refresh()
     }
+
+    // MARK: - Exit address
+
+    /// What the panel knows about where this Mac's traffic leaves.
+    ///
+    /// `untried` is a first-class case rather than a `nil` `Egress`, because
+    /// "we have not asked anyone" and "we asked and got nothing" have to look
+    /// different on screen. The first is the resting state of a feature that
+    /// deliberately does nothing until invited; the second is a failure.
+    enum EgressState: Equatable {
+        case untried
+        case checking
+        case ok(Egress, at: Date)
+        case failed(String)
+    }
+
+    /// In memory only. Never written to `UserDefaults`: the reading contains a
+    /// public IP address, and an app that keeps one on disk has to say so in a
+    /// privacy label. It costs one request to get it back.
+    @Published private(set) var egress: EgressState = .untried
+    private var egressTask: Task<Void, Never>?
+
+    /// How long an answer stands before the automatic path asks again.
+    ///
+    /// Ten minutes, not one second. The exit address changes when the route
+    /// changes — a different Wi-Fi, a VPN toggled, a Starlink PoP re-homing —
+    /// which is a human-scale event, not a per-tick one. Rechecking on the poll
+    /// loop would turn one opt-in lookup into 86,400 requests a day against
+    /// somebody's server.
+    static let egressMaxAge: TimeInterval = 600
+
+    /// The panel opened. Honours the setting; does nothing without it.
+    func egressPanelOpened() {
+        guard egressAuto else { return }
+        checkEgress(force: false)
+    }
+
+    /// Ask where this Mac's traffic leaves.
+    ///
+    /// The button calls this with `force: true` — an explicit press means "ask
+    /// now", even if the last answer is fresh, because the reason to press it a
+    /// second time is that you just changed networks. The automatic path passes
+    /// `false` and gets the cached answer inside `egressMaxAge`.
+    ///
+    /// Not `async`: the call sites are a button action and a view's `onAppear`,
+    /// and both want to return immediately with the row showing `checking`.
+    func checkEgress(force: Bool = true) {
+        if case .checking = egress { return }
+        if !force, case .ok(_, let at) = egress,
+           Date().timeIntervalSince(at) < Self.egressMaxAge { return }
+        egressTask?.cancel()
+        egress = .checking
+        let url = EgressLookup.endpoint(defaults)
+        egressTask = Task { [weak self] in
+            do {
+                let e = try await EgressLookup.fetch(from: url)
+                guard let self, !Task.isCancelled else { return }
+                self.egress = .ok(e, at: Date())
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.egress = .failed(EgressLookup.message(for: error))
+                EngineLog.failure("egress", error)
+            }
+        }
+    }
+
+    /// The host the check will contact, for the disclosure line. Read from the
+    /// same place the request is, so the sentence on screen cannot name one
+    /// server while the app calls another.
+    var egressHost: String { EgressLookup.displayHost(EgressLookup.endpoint(defaults)) }
+
+    /// For the headless render path only — see `seed`. Poses a reading the
+    /// harness could not otherwise reach without a network.
+    func seed(egress: EgressState) { self.egress = egress }
 
     /// Register/unregister the app as a macOS login item.
     ///

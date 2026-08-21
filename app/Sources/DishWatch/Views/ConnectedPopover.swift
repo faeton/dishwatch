@@ -10,10 +10,25 @@ struct ConnectedPopover: View {
     /// would show the one case that draws nothing.
     var build: BuildInfo = .main
     @EnvironmentObject var store: AppState
-    @State private var detailExpanded = false
+    @State private var detailExpanded: Bool
     @State private var confirmReboot = false
     /// Non-nil only while a drag is on one of the sparklines.
     @State private var scrub: Scrub?
+
+    /// `startExpanded` exists for the render harness, and it closes a real gap
+    /// rather than adding a knob. Everything in the detail row — the bearing,
+    /// the country's disclaimer, the service caveat, and now the exit reading
+    /// with its four states — sits behind `@State` that no snapshot could ever
+    /// reach, so the one part of the panel made entirely of wrapping paragraphs
+    /// was the one part never checked for wrapping. Same reason `ConfirmStrip`
+    /// is a separate view.
+    init(d: DishData, showSettings: Binding<Bool>, build: BuildInfo = .main,
+         startExpanded: Bool = false) {
+        self.d = d
+        self._showSettings = showSettings
+        self.build = build
+        self._detailExpanded = State(initialValue: startExpanded)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -906,6 +921,7 @@ struct ConnectedPopover: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                     countryDetail
+                    egressDetail
                     serviceDetail
                 }
                 .padding(.top, 10)
@@ -952,6 +968,97 @@ struct ConnectedPopover: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Where this Mac's traffic leaves the network — directly under the dish's
+    /// own country, because the pair only means anything together.
+    ///
+    /// The country above answers *what does the terminal think it is licensed
+    /// under*. This answers *where do my packets actually come out*, and the
+    /// interesting reading is when the second one says they are not coming out
+    /// of the dish at all. Nothing else in the panel can notice a laptop that
+    /// has quietly fallen back to a hotspot while a healthy dish sits beside it
+    /// reporting 200 Mbps it is not carrying.
+    ///
+    /// **It starts as a button, not as a reading**, and that is a privacy
+    /// decision rather than a layout one. Every other row here is a fact the
+    /// app already has; this one has to be fetched from a server that is not
+    /// the dish, so nothing happens until the user asks — either by pressing
+    /// this, or by turning the setting on once. The host is named on screen
+    /// before the first press, not buried in a privacy policy, because a
+    /// disclosure the user cannot see at the moment of consent is not one.
+    @ViewBuilder private var egressDetail: some View {
+        Divider().background(DW.hairline).padding(.vertical, 2)
+        switch store.egress {
+        case .untried:
+            egressPrompt(button: "Check",
+                         note: "Asks \(store.egressHost) which public address this Mac reaches the internet from — the one reading here that leaves your network. Nothing is sent until you press it.")
+        case .checking:
+            HStack {
+                Text("Exit").font(.system(size: 11.5)).foregroundStyle(DW.textA(0.45))
+                Spacer()
+                Text("checking…").font(.system(size: 11.5)).foregroundStyle(DW.textA(0.5))
+            }
+        case .ok(let e, let at):
+            HStack {
+                Text("Exit").font(.system(size: 11.5)).foregroundStyle(DW.textA(0.45))
+                Spacer()
+                Text(e.summary).font(.system(size: 11.5)).foregroundStyle(DW.textA(0.75))
+                // Small, and to the right of the reading it replaces. A press
+                // is how you ask again after changing networks, which is the
+                // only moment the answer is wrong rather than merely old.
+                Button { store.checkEgress() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(DW.textA(0.4))
+                        .padding(.leading, 2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            // The address, the AS and the age of the reading. The age matters
+            // more here than anywhere else on the panel: everything else is a
+            // second old and this can be ten minutes old, sitting in a column
+            // of live numbers.
+            egressNote("\(e.detail) · checked \(Self.age(of: at))", tone: 0.45)
+            if let caution = e.caution {
+                egressNote(caution, tone: 0.8, color: DW.amber)
+            }
+        case .failed(let why):
+            egressPrompt(button: "Retry", note: "Could not check: \(why).", color: DW.amber)
+        }
+    }
+
+    /// The un-checked and failed states: a label, a button, and one sentence.
+    private func egressPrompt(button: String, note: String, color: Color = DW.textA(0.45)) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Exit").font(.system(size: 11.5)).foregroundStyle(DW.textA(0.45))
+                Spacer()
+                DWButton(title: button) { store.checkEgress() }
+            }
+            egressNote(note, tone: 1, color: color)
+        }
+    }
+
+    private func egressNote(_ text: String, tone: Double, color: Color? = nil) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(color.map { $0.opacity(tone) } ?? DW.textA(tone))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "just now" / "4m ago" for the exit reading's age.
+    ///
+    /// A local copy rather than `AppState.lastGoodAgoText`, which is about the
+    /// poll loop and is phrased for a footer. Same words, different subject.
+    static func age(of date: Date) -> String {
+        let s = Int(Date().timeIntervalSince(date))
+        if s < 5 { return "just now" }
+        if s < 60 { return "\(s)s ago" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        return "\(s / 3600)h ago"
     }
 
     /// The service class again, this time with the sentence that says what it

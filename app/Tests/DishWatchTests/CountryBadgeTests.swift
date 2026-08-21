@@ -37,6 +37,36 @@ final class CountryBadgeTests: XCTestCase {
         }
     }
 
+    /// The bug this file was reopened for. A dish at sea reports XZ — the
+    /// user-assigned code for international waters — which is not in ISO
+    /// 3166-1 and has no flag glyph. The indicator pair composed anyway and the
+    /// panel drew two boxed letters beside the code.
+    func testUnassignedCodesNeverComposeAnUndrawableFlag() {
+        for code in ["XZ", "ZZ", "XX", "QM", "AA"] {
+            XCTAssertNil(DishData.flag(for: code), "\(code) has no flag glyph to compose")
+        }
+    }
+
+    /// International waters gets a picture that exists and a name, because the
+    /// reading is the whole point of the badge for anyone on a boat.
+    func testInternationalWatersReadsAsAPlace() {
+        XCTAssertEqual(data("XZ").countryBadge, "🌊 XZ")
+        XCTAssertEqual(data("xz").countryBadge, "🌊 XZ")
+        let help = data("XZ").countryHelp
+        XCTAssertTrue(help.hasPrefix("International waters (XZ) — not a country"), help)
+        XCTAssertTrue(help.contains("not a lookup of your IP address"), help)
+        XCTAssertTrue(help.contains("not derived from GPS"), help)
+        // The contradiction the branch exists to avoid.
+        XCTAssertFalse(help.contains("the country the dish reports for itself"), help)
+    }
+
+    /// A code-shaped value with neither a flag nor a name still draws, as the
+    /// letters alone. The dish named a place; only the ornament is missing.
+    func testFlaglessCodeKeepsItsLetters() {
+        XCTAssertEqual(data("ZZ").countryBadge, "ZZ")
+        XCTAssertEqual(data("zz").countryBadge, "ZZ")
+    }
+
     /// Nothing known, nothing drawn — the same rule `serviceLine` follows, and
     /// for the same reason: the panel never guesses a fact about the dish.
     func testSilentWhenTheDishSaidNothing() {

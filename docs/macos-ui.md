@@ -352,6 +352,45 @@ screen answered it, and the CLI did not either.
   beside it — small, current, true only of this boot — and the identity lines
   below are strings you copy, not ones you glance at.
 
+### The exit is a second question, and it is opt-in (2026-08-21)
+
+The country badge answers *what does the terminal believe it is licensed
+under*. It cannot answer *where do my packets actually come out*, and the
+disclaimer under it says so in as many words. The **Exit** row answers that
+second question, from a public address reflector, and it is deliberately built
+as a separate fact rather than as a better country.
+
+- **The reading worth having is the ASN, not the flag.** `AS14593` is Starlink.
+  Anything else means this Mac is not routing through the dish at all — a
+  laptop on a hotspot, a VPN, an ethernet fallback — while the whole panel
+  above keeps describing a link it is not using. Nothing else in the app can
+  notice that. The country and the ground station (`lndngbr1`, parsed out of
+  `customer.<pop>.isp.starlink.com`) ride along because they cost nothing once
+  the answer is in hand.
+- **Nothing is fetched until asked.** The row opens as a label and a **Check**
+  button, under one sentence naming the host it will contact. Turning on
+  *Settings → Check where my traffic exits* moves it to panel-open, rate-limited
+  to ten minutes. It is never on the poll loop: the exit changes when the route
+  changes, which is a human-scale event, and a once-a-second lookup would be
+  86,400 requests a day against somebody else's server.
+- **Off by default, because the default is a promise.** `Info.plist`'s Local
+  Network string is a review-visible surface that used to end *"Nothing is sent
+  anywhere else."* This feature makes that conditional, so the string now states
+  the condition. That sentence is why the shipped default cannot be "on".
+- **The host is named on screen, at the moment of consent** — not in a privacy
+  policy, and not only in Settings. `AppState.egressHost` reads the URL the
+  request will actually use, so the disclosure and the request cannot drift.
+- **The reading lives in memory only.** It contains a public IP address, and an
+  app that writes one to disk has to say so in a privacy label. Re-asking costs
+  one request.
+- **A missing field costs one line, not the reading.** `reverse` comes and goes
+  between one lookup and the next on the same machine, so the PoP drops out of
+  the summary and the rest stands. An answer with no address at all is a
+  *failure* — otherwise a captive portal's JSON decodes into an empty reading
+  and gets drawn as fact.
+- **The flag is `DishData.flag`, not a second copy.** A GeoIP database can
+  answer `ZZ` exactly as firmware can, and that guard already exists.
+
 ### Scrubbing a sparkline
 
 Press and drag along any trace: a rule marks the column, a dot lands on each
@@ -396,6 +435,12 @@ useless — so the mean is the headline and the worst second is detail.
 | Power grid sub-label | `%.1f W session` |
 | Hero session line | `up %@ · boots %d` — plus ` · 🇬🇱 GL` when the dish named a country, and nothing at all when it did not |
 | Country line in the detail row | `Country` / `🇬🇱 GL`, followed by `%@ (%@) — the country the dish reports for itself. It is the terminal's own reading, not a lookup of your IP address and not derived from GPS, so it need not match where your traffic leaves the network.` — **on screen, not a tooltip**; it shipped as a `.help()` for one afternoon, which this document had already ruled out |
+| Exit line, before any lookup | `Exit` / **Check**, followed by `Asks %@ which public address this Mac reaches the internet from — the one reading here that leaves your network. Nothing is sent until you press it.` |
+| Exit line, with a reading | `Exit` / `🇬🇧 GB · Starlink · lndngbr1`, then `%@ · AS%d · IPv4 · checked %@` — the address, the AS and the age, because this row can be ten minutes old in a column of one-second numbers |
+| Exit line, traffic not on the dish | amber: `This Mac is not routing through the dish — its traffic leaves via %@. The readings above still describe the dish.` |
+| Exit line, VPN exit | amber: `The exit looks like a VPN or proxy, so the country above is the VPN's, not yours.` |
+| Exit line, failed | `Exit` / **Retry**, amber: `Could not check: %@.` |
+| Exit setting | `Check where my traffic exits` · `asks %@ on panel open` — the note names the host, not the effect |
 | Detail row, aim | `Bearing` / `%d° · %@`, `Elevation` / `%d° above horizon`, beside a `SkyPlot` |
 | Detail row, aim explanation | `Where the dish is pointing its beam, not where it is. Azimuth is the compass bearing and elevation is the angle above the horizon; neither is a coordinate — the dish reports only that GPS has a fix, never the position itself.` |
 | Session footer | `Observed %@ · ping %d · %d%% clean · peak ↓%d ↑%d · %.1f W` |
@@ -461,6 +506,17 @@ measured — the outage that gets closed when the gap is dropped.
 `dishwatch json` already emits these (see `dashboard.go`), sourced from
 `~/.cache/sl/stats.json`. All are zero when fewer than 120 samples have been
 collected, which is the app's cue to hide the footer.
+
+**The exit reading is deliberately not in this contract.** It would have to be a
+nested object and a `DashboardSchemaVersion` bump, and it does not belong: it
+comes from a different source, on a different cadence (minutes, not the tick),
+with a different failure mode. Folding it in would mean a third party's outage
+riding along inside every dish snapshot, and would make the helper — a pure dish
+reader that talks to `192.168.100.1` and nothing else — the thing that reaches
+the public internet. It lives in `Model/Egress.swift`, fetched by the app, so
+the whole third-party surface of this bundle is one file you can read in a
+minute. That is what a privacy claim in `Info.plist` has to be checkable
+against.
 
 | Field | Meaning |
 |---|---|

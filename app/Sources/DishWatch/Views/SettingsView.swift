@@ -268,6 +268,21 @@ struct SettingsContent: View {
             VStack(spacing: 13) {
                 toggleRow("Pinned widget — always on top", $store.pinnedWidget)
                 toggleRow("Launch at login", $store.launchAtLogin)
+                // The only setting in this app that changes *who the app talks
+                // to*, so the note names the host rather than describing an
+                // effect — that is the fact a user needs before flipping it,
+                // and it is read from the same place the request is.
+                //
+                // The full sentence deliberately lives on the panel row instead
+                // of here. It is the better place for it twice over: it is
+                // where the reading appears, and it is on screen before the
+                // first lookup ever happens, which is the moment consent
+                // actually means something. A paragraph here also costs ~90 pt
+                // of a list that `SettingsHeightTests` keeps under one screen.
+                //
+                // Off by default — see `AppState.egressAuto`.
+                toggleRow("Check where my traffic exits", $store.egressAuto,
+                          note: "asks \(store.egressHost) on panel open")
                 if let err = store.launchAtLoginError {
                     Text(err)
                         .font(.system(size: 11))

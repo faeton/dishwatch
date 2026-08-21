@@ -406,6 +406,20 @@ is the first thing App Review sees.
 (`CA92.1`), copied into `Contents/Resources` by `app/Makefile`. Add
 `ITSAppUsesNonExemptEncryption=false` while there.
 
+**6a. The exit check is the one thing in the bundle that contacts a third
+party**, and it needs a decision before submission rather than after. It is
+off by default, fetches nothing until the user presses a button or turns the
+setting on, names the host on screen at the moment of consent, and keeps the
+result in memory only — but `ip.unt1.com` is a server the developer operates,
+which is the fact that decides the label. Nothing is *sent*: no coordinates, no
+identifiers, no payload we assemble; the server derives a coarse country from
+the source address of the connection itself, which is the weaker half of the
+problem `internal/geo` had. Still to settle: whether the reflector retains
+addresses (if it does not, say so in the policy and keep it that way), which
+label covers it, and whether a privacy-policy URL is needed at all. The Local
+Network usage string in `Info.plist` has already been reworded — it used to
+read *"Nothing is sent anywhere else."*, which this feature makes conditional.
+
 **7. The energy numbers that are wrong today.** These ship in the CLI right now
 and are independent of everything above: give energy its own observed-sample
 counter so `avgW` stops dividing observed joules by wall-clock time

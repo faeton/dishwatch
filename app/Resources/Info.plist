@@ -66,9 +66,15 @@
 	<false/>
 	<!-- Shown verbatim in the Local Network permission prompt. This is a
 	     review-visible surface: it has to explain the 192.168.100.1 traffic in
-	     the user's terms, not ours. -->
+	     the user's terms, not ours.
+
+	     The second sentence used to read "Nothing is sent anywhere else." The
+	     optional exit-address check (Settings → Check where my traffic exits,
+	     off by default) made that claim conditional, so it says the condition
+	     now. A privacy string that is true only with the shipped defaults is
+	     the kind of thing a reviewer finds and we do not get to explain. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>DishWatch reads status directly from your Starlink dish at 192.168.100.1 on your local network. Nothing is sent anywhere else.</string>
+	<string>DishWatch reads status directly from your Starlink dish at 192.168.100.1 on your local network. It contacts no other server unless you ask it to check where your traffic exits, which is off until you turn it on.</string>
 	<!-- The dish speaks gRPC over plain TCP and advertises no Bonjour service,
 	     so no NSBonjourServices key. Recheck this if the TCC spike (roadmap
 	     Phase 2) shows the prompt never appears without one. -->

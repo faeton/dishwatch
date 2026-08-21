@@ -293,7 +293,8 @@ struct DishData: Decodable, Sendable, Equatable {
     var stateLabel: String { state.rawValue }
 
     /// The reported country, as a flag and its code — "🇬🇱 GL" — for the line
-    /// under the hardware chip. `nil` when there is nothing honest to draw.
+    /// under the hardware chip. `nil` only when the dish named nothing a place
+    /// could be read out of.
     ///
     /// The code rides along with the flag rather than being replaced by it.
     /// Flags are the one glyph on this panel a reader can genuinely fail to
@@ -302,9 +303,16 @@ struct DishData: Decodable, Sendable, Equatable {
     /// and fall back to the bare letters anyway. Two letters beside it costs a
     /// few points of a column with room to spare and makes the reading
     /// unambiguous for everyone, which a 12.5 pt tricolour does not.
+    ///
+    /// A code with no glyph still draws — as the bare letters. The dish having
+    /// named a place is the fact; the picture beside it is decoration, and
+    /// dropping the line because Unicode has no flag for "XZ" would throw away
+    /// the reading to protect the ornament.
     var countryBadge: String? {
-        guard let flag = DishData.flag(for: countryCode) else { return nil }
-        return "\(flag) \(countryCode.uppercased())"
+        let code = countryCode.uppercased()
+        guard DishData.isCodeShaped(code) else { return nil }
+        guard let glyph = DishData.glyph(for: code) else { return code }
+        return "\(glyph) \(code)"
     }
 
     /// What that badge means, for the detail row.
@@ -327,8 +335,15 @@ struct DishData: Decodable, Sendable, Equatable {
     /// Only read when `countryBadge` is non-nil, so it may assume a code.
     var countryHelp: String {
         let code = countryCode.uppercased()
+        let provenance = "It is the terminal's own reading, not a lookup of your IP address and not derived from GPS, so it need not match where your traffic leaves the network."
+        // A non-country code has to say so before anything else. "International
+        // waters — the country the dish reports for itself" is a sentence that
+        // argues with itself, and the reader is left holding the contradiction.
+        if let place = DishData.nonCountries[code] {
+            return "\(place.name) (\(code)) — \(place.what). \(provenance)"
+        }
         let named = DishData.regionName(code).map { "\($0) (\(code))" } ?? code
-        return "\(named) — the country the dish reports for itself. It is the terminal's own reading, not a lookup of your IP address and not derived from GPS, so it need not match where your traffic leaves the network."
+        return "\(named) — the country the dish reports for itself. \(provenance)"
     }
 
     /// The localized country name for a code, or `nil` for one Foundation does
@@ -385,18 +400,51 @@ struct DishData: Decodable, Sendable, Equatable {
         return points[i]
     }
 
+    /// Whether a wire value has the shape of an alpha-2 code at all.
+    ///
+    /// The wire field is a free string, so "" — the ordinary "did not say" —
+    /// and any longer token firmware might put there ("UNKNOWN") have to be
+    /// turned away before anything treats them as a place.
+    static func isCodeShaped(_ code: String) -> Bool {
+        let letters = Array(code.uppercased().unicodeScalars)
+        return letters.count == 2 && letters.allSatisfy { $0.value >= 65 && $0.value <= 90 }
+    }
+
+    /// Codes that are shaped like countries, are reported by real dishes, and
+    /// are not countries.
+    ///
+    /// XZ is the user-assigned alpha-2 code UN/LOCODE gives installations in
+    /// international waters, and it is what a maritime terminal reports the
+    /// moment it leaves every country's territorial sea. Being user-assigned it
+    /// is not in ISO 3166-1, so Foundation has no name for it and Unicode has
+    /// no flag: the panel composed 🇽🇿 and macOS drew two letters in boxes —
+    /// the "row of indicator glyphs nobody can read" this badge exists to
+    /// avoid, on the one reading a boat owner most wants to see.
+    static let nonCountries: [String: (name: String, glyph: String, what: String)] = [
+        "XZ": ("International waters", "🌊",
+               "not a country — it is what a terminal reports for itself once it is outside every country's waters"),
+    ]
+
+    /// The picture for a code: a flag where one exists, the stand-in where the
+    /// place is real but flagless, `nil` where there is nothing to draw.
+    static func glyph(for code: String) -> String? {
+        flag(for: code) ?? nonCountries[code.uppercased()]?.glyph
+    }
+
     /// The regional-indicator flag for a two-letter country code, or `nil`.
     ///
     /// Unicode composes flags from pairs of regional indicator symbols, one per
-    /// letter, at a fixed offset from ASCII 'A'. The guard is not defensive
-    /// tidiness: the wire field is a free string, so "" and any longer token
-    /// firmware might put there ("UNKNOWN") would otherwise map to a run of
-    /// stray indicator glyphs — which macOS renders as loose letters in boxes,
-    /// or worse, silently pairs into the flag of a country nobody is in.
+    /// letter, at a fixed offset from ASCII 'A'. Two guards, for two different
+    /// failures. The shape guard keeps free-text junk from mapping to a run of
+    /// stray indicator glyphs, or worse, silently pairing into the flag of a
+    /// country nobody is in. The ISO guard is the one that matters on screen:
+    /// the pairing arithmetic succeeds for every letter pair, but a font only
+    /// has a glyph for assigned codes, so "XZ" and "ZZ" composed into a
+    /// sequence macOS renders as boxed letters. Asking the ISO list first means
+    /// a code either gets a flag that draws or gets no flag at all.
     static func flag(for code: String) -> String? {
+        guard isCodeShaped(code), isoRegionCodes.contains(code.uppercased()) else { return nil }
         let letters = Array(code.uppercased().unicodeScalars)
-        guard letters.count == 2,
-              letters.allSatisfy({ $0.value >= 65 && $0.value <= 90 }) else { return nil }
         var out = ""
         for l in letters {
             // 0x1F1E6 is REGIONAL INDICATOR SYMBOL LETTER A; the range is
