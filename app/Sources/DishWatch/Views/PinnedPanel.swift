@@ -13,7 +13,20 @@ final class PinnedPanelController {
 
     func setVisible(_ on: Bool) {
         // Don't spawn a window during headless snapshot runs.
+        //
+        // `#if DEBUG` for the same reason every other environment hook in this
+        // app has one, and this was the one that did not. `Render` itself is
+        // compiled out of a release build, so the *only* thing this line did
+        // there was leave "DISHWATCH_RENDER" in a shipped binary and let a
+        // stray environment variable suppress a window the user had turned on
+        // — a shipped app changing behaviour on an env var, which is precisely
+        // what CI's dev-hook guard exists to prevent. It never caught this:
+        // that check enumerates hook names by hand and this one was not on the
+        // list. It is now, which is what stops the pair from drifting apart
+        // again.
+        #if DEBUG
         if ProcessInfo.processInfo.environment["DISHWATCH_RENDER"] != nil { return }
+        #endif
         // Defer to the next runloop tick: creating an NSHostingView synchronously
         // during SwiftUI App-graph instantiation (AppState.init via @StateObject)
         // triggers an AttributeGraph reentrancy abort.

@@ -128,7 +128,7 @@ jobs:
         working-directory: app
         run: |
           bin=.build/release/DishWatch
-          for s in DISHWATCH_BIN DISHWATCH_NETPROBE DISHWATCH_APPICON DISHWATCH_PROBE DISHWATCH_EGRESS Sites/dishwatch; do
+          for s in DISHWATCH_BIN DISHWATCH_NETPROBE DISHWATCH_APPICON DISHWATCH_PROBE DISHWATCH_EGRESS DISHWATCH_RENDER DISHWATCH_ICONS Sites/dishwatch; do
             if strings -a "$bin" | grep -q -F "$s"; then
               echo "release binary contains dev hook '$s'" >&2; exit 1
             fi
