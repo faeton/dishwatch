@@ -70,24 +70,6 @@ final class AppState: ObservableObject {
     @Published var simulateBattery: Bool {
         didSet { Task { await refresh() } }
     }
-    /// Check the exit address whenever the panel opens, instead of only when
-    /// the user presses the button.
-    ///
-    /// **Off by default, and this is the one setting where the default is a
-    /// promise rather than a preference.** Every other control here changes how
-    /// something is drawn. This one decides whether the app contacts a server
-    /// that is not the dish — which is a claim `Info.plist`'s Local Network
-    /// string makes to the user and to App Review, so the shipped default has
-    /// to be the one that keeps it true without qualification.
-    @Published var egressAuto: Bool {
-        didSet {
-            defaults.set(egressAuto, forKey: "egressAuto")
-            // Turning it on is itself a request. Waiting for the next panel
-            // open would leave the row reading "not checked" directly under a
-            // switch the user just moved, which reads as a broken setting.
-            if egressAuto && !oldValue { checkEgress(force: false) }
-        }
-    }
     /// Why the last launch-at-login change didn't take, if it didn't.
     @Published private(set) var launchAtLoginError: String?
     private var applyingLaunchAtLogin = false
@@ -146,7 +128,6 @@ final class AppState: ObservableObject {
         self.launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? false
         self.refreshInterval = defaults.object(forKey: "refresh") as? Int ?? 1
         self.colorThroughput = defaults.object(forKey: "colorThroughput") as? Bool ?? false
-        self.egressAuto = defaults.object(forKey: "egressAuto") as? Bool ?? false
         self.simulateBattery = false
         restartPolling()
         pinnedController.setVisible(pinnedWidget)
@@ -481,34 +462,20 @@ final class AppState: ObservableObject {
     @Published private(set) var egress: EgressState = .untried
     private var egressTask: Task<Void, Never>?
 
-    /// How long an answer stands before the automatic path asks again.
-    ///
-    /// Ten minutes, not one second. The exit address changes when the route
-    /// changes — a different Wi-Fi, a VPN toggled, a Starlink PoP re-homing —
-    /// which is a human-scale event, not a per-tick one. Rechecking on the poll
-    /// loop would turn one opt-in lookup into 86,400 requests a day against
-    /// somebody's server.
-    static let egressMaxAge: TimeInterval = 600
-
-    /// The panel opened. Honours the setting; does nothing without it.
-    func egressPanelOpened() {
-        guard egressAuto else { return }
-        checkEgress(force: false)
-    }
-
     /// Ask where this Mac's traffic leaves.
     ///
-    /// The button calls this with `force: true` — an explicit press means "ask
-    /// now", even if the last answer is fresh, because the reason to press it a
-    /// second time is that you just changed networks. The automatic path passes
-    /// `false` and gets the cached answer inside `egressMaxAge`.
+    /// **Every call is a press.** There is no timed path, no panel-open path
+    /// and no cache to serve a stale answer from: the only callers are the
+    /// Check and refresh buttons, so a request goes out exactly when a user
+    /// asks for one and never otherwise. That is also why a fresh answer is
+    /// not reused — the reason to press it a second time is that you just
+    /// changed networks, which is precisely when the cached reading is wrong.
     ///
-    /// Not `async`: the call sites are a button action and a view's `onAppear`,
-    /// and both want to return immediately with the row showing `checking`.
-    func checkEgress(force: Bool = true) {
+    /// Not `async`: the call site is a button action and wants to return
+    /// immediately with the row showing `checking`.
+    func checkEgress() {
+        // The one thing a second press must not do is open a second request.
         if case .checking = egress { return }
-        if !force, case .ok(_, let at) = egress,
-           Date().timeIntervalSince(at) < Self.egressMaxAge { return }
         egressTask?.cancel()
         egress = .checking
         let url = EgressLookup.endpoint(defaults)

@@ -367,16 +367,20 @@ as a separate fact rather than as a better country.
   notice that. The country and the ground station (`lndngbr1`, parsed out of
   `customer.<pop>.isp.starlink.com`) ride along because they cost nothing once
   the answer is in hand.
-- **Nothing is fetched until asked.** The row opens as a label and a **Check**
-  button, under one sentence naming the host it will contact. Turning on
-  *Settings → Check where my traffic exits* moves it to panel-open, rate-limited
-  to ten minutes. It is never on the poll loop: the exit changes when the route
-  changes, which is a human-scale event, and a once-a-second lookup would be
-  86,400 requests a day against somebody else's server.
-- **Off by default, because the default is a promise.** `Info.plist`'s Local
-  Network string is a review-visible surface that used to end *"Nothing is sent
-  anywhere else."* This feature makes that conditional, so the string now states
-  the condition. That sentence is why the shipped default cannot be "on".
+- **Nothing is fetched except on a press.** The row opens as a label and a
+  **Check** button, under one sentence naming the host it will contact, and the
+  ↻ beside a reading is how you ask again. There is no other way in: no timer,
+  no panel-open trigger, no setting that adds one. A panel-open lookup existed
+  briefly and was removed — it turned one opt-in into a request every time the
+  panel was opened, which is not what "only when I ask" means to the person who
+  runs the reflector. The exit changes when the route changes, a human-scale
+  event, so a press is the right granularity and a poll loop would be 86,400
+  requests a day against somebody else's server.
+- **The press is the whole consent story.** `Info.plist`'s Local Network string
+  is a review-visible surface, and it names the trigger — *"unless you press
+  Check"* — rather than a default. A claim about defaults stops being true the
+  moment a user flips something; a claim about the only code path that makes
+  the request cannot.
 - **The host is named on screen, at the moment of consent** — not in a privacy
   policy, and not only in Settings. `AppState.egressHost` reads the URL the
   request will actually use, so the disclosure and the request cannot drift.

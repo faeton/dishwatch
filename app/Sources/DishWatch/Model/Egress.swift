@@ -20,10 +20,11 @@ import Foundation
 ///   changes the dish itself never reports.
 /// - `countryCode` — where the traffic exits, which is not where you are.
 ///
-/// **Never fetched on the poll tick, and never without being asked.** See
-/// `AppState.checkEgress` for the consent rule; the short version is that the
-/// app talks only to 192.168.100.1 until a user clicks a button or turns a
-/// setting on, and Info.plist's Local Network string says so.
+/// **Never fetched except on a press.** See `AppState.checkEgress` for the
+/// consent rule; the short version is that the app talks only to
+/// 192.168.100.1 until a user clicks the Check button — there is no timer, no
+/// panel-open trigger and no setting that adds one — and Info.plist's Local
+/// Network string says so.
 struct Egress: Equatable {
     /// The public address the reflector saw. Shown, because it is the fact —
     /// the country and the operator are both derived from it.

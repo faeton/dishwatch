@@ -408,9 +408,9 @@ is the first thing App Review sees.
 
 **6a. The exit check is the one thing in the bundle that contacts a third
 party**, and it needs a decision before submission rather than after. It is
-off by default, fetches nothing until the user presses a button or turns the
-setting on, names the host on screen at the moment of consent, and keeps the
-result in memory only — but `ip.unt1.com` is a server the developer operates,
+fetches nothing except on a button press — there is no timer, no panel-open
+trigger and no setting that adds one — names the host on screen at the moment
+of consent, and keeps the result in memory only — but `ip.unt1.com` is a server the developer operates,
 which is the fact that decides the label. Nothing is *sent*: no coordinates, no
 identifiers, no payload we assemble; the server derives a coarse country from
 the source address of the connection itself, which is the weaker half of the
@@ -419,6 +419,8 @@ addresses (if it does not, say so in the policy and keep it that way), which
 label covers it, and whether a privacy-policy URL is needed at all. The Local
 Network usage string in `Info.plist` has already been reworded — it used to
 read *"Nothing is sent anywhere else."*, which this feature makes conditional.
+It now names the trigger (*"unless you press Check"*) rather than a default,
+which stays true no matter what the user has switched on.
 
 **7. The energy numbers that are wrong today.** These ship in the CLI right now
 and are independent of everything above: give energy its own observed-sample

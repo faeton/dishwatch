@@ -106,13 +106,6 @@ struct PopoverView: View {
             .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
             .onAppear {
                 screenHeight = PanelMetrics.hostScreenHeight
-                // The automatic half of the exit check, and the only place it
-                // is triggered without a press. It is a no-op unless the
-                // setting is on, and rate-limited to `egressMaxAge` when it is
-                // — deliberately not on the poll loop, which runs once a
-                // second and would turn one opt-in into a flood against
-                // somebody else's server.
-                store.egressPanelOpened()
             }
     }
 

@@ -68,13 +68,14 @@
 	     review-visible surface: it has to explain the 192.168.100.1 traffic in
 	     the user's terms, not ours.
 
-	     The second sentence used to read "Nothing is sent anywhere else." The
-	     optional exit-address check (Settings → Check where my traffic exits,
-	     off by default) made that claim conditional, so it says the condition
-	     now. A privacy string that is true only with the shipped defaults is
-	     the kind of thing a reviewer finds and we do not get to explain. -->
+	     The second sentence names the one exception and its trigger. The
+	     exit-address check is the only thing in the app that contacts anyone
+	     but the dish, and it happens on a button press and on nothing else —
+	     no timer, no panel-open trigger, no setting that adds one. Stating
+	     the trigger rather than a default keeps the string true whatever the
+	     user has switched on, which a default-dependent claim would not. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>DishWatch reads status directly from your Starlink dish at 192.168.100.1 on your local network. It contacts no other server unless you ask it to check where your traffic exits, which is off until you turn it on.</string>
+	<string>DishWatch reads status directly from your Starlink dish at 192.168.100.1 on your local network. It contacts no other server unless you press Check to see where your traffic exits.</string>
 	<!-- The dish speaks gRPC over plain TCP and advertises no Bonjour service,
 	     so no NSBonjourServices key. Recheck this if the TCC spike (roadmap
 	     Phase 2) shows the prompt never appears without one. -->

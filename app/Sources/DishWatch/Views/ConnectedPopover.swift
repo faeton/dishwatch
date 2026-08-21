@@ -983,10 +983,10 @@ struct ConnectedPopover: View {
     /// **It starts as a button, not as a reading**, and that is a privacy
     /// decision rather than a layout one. Every other row here is a fact the
     /// app already has; this one has to be fetched from a server that is not
-    /// the dish, so nothing happens until the user asks — either by pressing
-    /// this, or by turning the setting on once. The host is named on screen
-    /// before the first press, not buried in a privacy policy, because a
-    /// disclosure the user cannot see at the moment of consent is not one.
+    /// the dish, so nothing happens until the user presses this. There is no
+    /// second way in. The host is named on screen before the first press, not
+    /// buried in a privacy policy, because a disclosure the user cannot see at
+    /// the moment of consent is not one.
     @ViewBuilder private var egressDetail: some View {
         Divider().background(DW.hairline).padding(.vertical, 2)
         switch store.egress {
@@ -1018,8 +1018,8 @@ struct ConnectedPopover: View {
             }
             // The address, the AS and the age of the reading. The age matters
             // more here than anywhere else on the panel: everything else is a
-            // second old and this can be ten minutes old, sitting in a column
-            // of live numbers.
+            // second old, and this stands untouched until the next press —
+            // an hour-old fact sitting in a column of live numbers.
             egressNote("\(e.detail) · checked \(Self.age(of: at))", tone: 0.45)
             if let caution = e.caution {
                 egressNote(caution, tone: 0.8, color: DW.amber)
