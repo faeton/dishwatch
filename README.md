@@ -272,10 +272,14 @@ preview the generated formula in `dist/homebrew/Formula/dishwatch.rb`.
 
 ## Roadmap
 
-A native macOS menu-bar app (App Store first) is planned — see
-[`docs/roadmap.md`](docs/roadmap.md) for the architecture and phased plan, and
-[`docs/optimizations.md`](docs/optimizations.md) for the review findings and
-cleanup backlog that Phase 0 works through.
+The macOS menu-bar app ships; the Mac App Store build is still blocked on
+certificates. See [`docs/roadmap.md`](docs/roadmap.md) for its architecture and
+phased plan, and [`docs/optimizations.md`](docs/optimizations.md) for the review
+findings and cleanup backlog.
+
+An iPhone app is briefed but not started — [`docs/ios.md`](docs/ios.md) covers
+what the phone can honestly show, why the Mac's embedded-helper architecture
+cannot be ported to iOS, and the on-device gates that settle the engine choice.
 
 ## License
 

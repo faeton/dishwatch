@@ -38,6 +38,11 @@
 > certificates rather than code (Apple Distribution and 3rd Party Mac Developer
 > Installer, neither of which this machine has).
 
+> **2026-09-18.** An iPhone app is briefed separately in [ios.md](ios.md).
+> Nothing in this doc changes: iOS cannot spawn a subprocess, so Option C does
+> not port, and that brief reopens the A/B engine question on its own terms and
+> settles it on its own gates. macOS stays on the embedded helper.
+
 ## Goal
 
 A native **macOS menu-bar app** — signal-colored status glyph with a tooltip
