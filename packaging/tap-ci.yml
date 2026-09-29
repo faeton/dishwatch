@@ -34,7 +34,7 @@ jobs:
   audit:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: tap this checkout
         run: |
@@ -50,18 +50,80 @@ jobs:
       # --online fetches the URL and verifies the checksum, which is the whole
       # point: a cask whose sha256 does not match the published DMG installs
       # nowhere, and nothing else here would notice.
+      #
+      # One audit problem gets a grace period rather than an immediate red:
+      # "Version 'X' differs from 'Y' retrieved by livecheck". A release cuts
+      # the tap in two pushes — goreleaser pushes the formula the moment the
+      # tag builds, and the cask can only follow once the DMG has been through
+      # notarization and uploaded, minutes later. In between, the cask really
+      # is a version behind a release that really is live, and the audit really
+      # does fail, on a commit that was correct when it was made.
+      #
+      # The window cannot be closed from the publishing side, so it is judged
+      # by age here: the same complaint means nothing 40 seconds after a
+      # release and means a genuinely forgotten cask a day later. v0.2.6 was
+      # the day-later case — the cask was missed at release time and the
+      # nightly audit caught it 20 hours on. GRACE keeps that catch while
+      # letting the publish window through.
       - name: audit casks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRACE: 3600
         run: |
           shopt -s nullglob
           n=0
+          rc=0
           for f in Casks/*.rb; do
             token="$(basename "$f" .rb)"
             n=$((n + 1))
             echo "== auditing $token"
-            brew audit --cask --online --strict "faeton/tap/$token"
+            out="$(brew audit --cask --online --strict "faeton/tap/$token" 2>&1)" && {
+              printf '%s\n' "$out"
+              continue
+            }
+            printf '%s\n' "$out"
+
+            # Problems are the ` - ` lines. Parse them out and set the
+            # livecheck-version ones aside; anything else is fatal as before.
+            problems="$(printf '%s\n' "$out" | sed -n 's/^ *- //p')"
+            if [ -z "$problems" ]; then
+              echo "  ERROR: audit failed but no ' - ' problem lines parsed — brew's" >&2
+              echo "         output shape changed and this step can no longer tell a" >&2
+              echo "         version lag from a real failure. Failing on purpose." >&2
+              rc=1; continue
+            fi
+            others="$(printf '%s\n' "$problems" | grep -v "retrieved by livecheck" || true)"
+            if [ -n "$others" ]; then
+              rc=1; continue
+            fi
+
+            # Only the version lag is left. Time it against the release the
+            # cask is lagging behind, named by livecheck in the message itself.
+            newer="$(printf '%s\n' "$problems" | sed -n "s/.*differs from '\([^']*\)'.*/\1/p" | head -1)"
+            published="$(gh release view "v$newer" --repo faeton/dishwatch \
+                           --json publishedAt -q .publishedAt 2>/dev/null || true)"
+            if [ -z "$published" ]; then
+              echo "  FAIL $token — livecheck says $newer but no v$newer release" >&2
+              echo "       exists to date it. Not a publish-window lag." >&2
+              rc=1; continue
+            fi
+            # TZ=UTC is load-bearing: publishedAt is UTC, but `date -j -f`
+            # reads its input as local time, so without it the age is off by
+            # the runner's offset — in the direction that makes a stale cask
+            # look younger than it is and slip through the window.
+            age=$(( $(date +%s) - $(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$published" +%s) ))
+            if [ "$age" -lt "$GRACE" ]; then
+              echo "::warning title=cask lag::$token is behind v$newer, published ${age}s ago — within the ${GRACE}s publish window, not failing"
+            else
+              echo "  FAIL $token — behind v$newer, published ${age}s ago. That is past" >&2
+              echo "       the ${GRACE}s publish window: the cask bump was missed, not" >&2
+              echo "       merely late. Run \`make cask\` in the dishwatch repo." >&2
+              rc=1
+            fi
           done
           echo "audited $n cask(s)"
           test "$n" -gt 0 || { echo "ERROR: no casks matched Casks/*.rb" >&2; exit 1; }
+          exit $rc
 
       # Advisory, and deliberately not fatal: the goreleaser-generated formula
       # carries `version` alongside per-arch URLs, which --strict calls
@@ -81,9 +143,29 @@ jobs:
             name="$(basename "$f" .rb)"
             n=$((n + 1))
             echo "== auditing $name"
-            brew audit --formula --online --strict "faeton/tap/$name" \
-              && echo "   clean" \
-              || echo "::warning title=formula lint::brew audit --strict flagged $name (see log)"
+            # goreleaser's formula template writes `version` unconditionally
+            # and has no setting to leave it out, so --strict calls it
+            # redundant with the version in the URL on every release. It is
+            # set aside here, since it cannot be fixed at the source. Anything
+            # else still warns.
+            out="$(brew audit --formula --online --strict "faeton/tap/$name" 2>&1)" && {
+              echo "   clean"
+              continue
+            }
+            # brew emits its own ::error:: workflow command, which would put a
+            # red annotation on a known, set-aside problem. Defuse it in the
+            # echo; a real problem gets the ::warning below instead.
+            printf '%s\n' "$out" | sed 's/^::error::/error: /'
+            problems="$(printf '%s\n' "$out" | sed -n 's/^ *\* //p')"
+            others="$(printf '%s\n' "$problems" \
+                        | grep -v "is redundant with version scanned from URL" || true)"
+            # No `* ` lines at all means brew's output changed shape; that must
+            # not read as "only the known problem".
+            if [ -z "$problems" ] || [ -n "$others" ]; then
+              echo "::warning title=formula lint::brew audit --strict flagged $name (see log)"
+            else
+              echo "   clean apart from goreleaser's redundant \`version\`"
+            fi
           done
           echo "audited $n formula(e)"
           test "$n" -gt 0 || { echo "ERROR: no formulae matched Formula/*.rb" >&2; exit 1; }
@@ -115,7 +197,20 @@ jobs:
             fi
             while read -r url want; do
               url="${url//\#\{version\}/$ver}"
-              if ! got="$(curl -fsSL --retry 2 --max-time 300 "$url" | shasum -a 256 | awk '{print $1}')"; then
+              # Rate limits, not broken URLs, are what fails this loop. The
+              # source-tarball URLs (/archive/refs/tags/) come from codeload,
+              # which throttles hard and shares its budget across every runner
+              # on the same egress IP; two runs in a row lost the same tarball
+              # to 429 then 503 while its hash was provably correct and it
+              # downloaded 200 every time from a laptop. Release assets live on
+              # a different host and have never been the ones to fail.
+              #
+              # So: enough headroom to outlast a throttle window (5 tries, 5s
+              # apart) rather than the 2 quick tries that were being spent in
+              # under two seconds. --retry-all-errors because curl will not
+              # otherwise retry some of the codes codeload answers with.
+              if ! got="$(curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+                            --max-time 300 "$url" | shasum -a 256 | awk '{print $1}')"; then
                 echo "  FAIL ${url##*/} — did not download" >&2; rc=1; continue
               fi
               if [ "$got" = "$want" ]; then
@@ -137,7 +232,7 @@ jobs:
     runs-on: macos-15
     needs: audit
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: tap this checkout
         run: |
@@ -187,8 +282,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: audit
     steps:
-      - uses: actions/checkout@v4
-      - uses: Homebrew/actions/setup-homebrew@master
+      - uses: actions/checkout@v7
+      - uses: Homebrew/actions/setup-homebrew@main
       # No staging: setup-homebrew already symlinks this checkout in as
       # faeton/tap, so the tap-qualified name resolves as-is. Copying over that
       # path is what broke the two previous attempts — first nesting the repo
