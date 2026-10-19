@@ -39,6 +39,10 @@ struct ConnectedPopover: View {
             Group {
                 hero
                 Divider().background(DW.hairline).padding(.horizontal, 16)
+                if d.bankAnchored {
+                    BankCard(d: d, onAdjust: { showBankSetup = true })
+                        .padding(.horizontal, 16).padding(.top, 14)
+                }
                 metricGrid.padding(.top, 14).padding(.horizontal, 16)
                 sparklines.padding(.top, 4)
                 observedFooter

@@ -559,7 +559,7 @@ trailing entirely. The sparkline already shows the shape; the footer carries the
 peak that means something.
 
 **Replace `Wh since boot` with session watts in the power cell?** Grok suggested
-it; rejected. `BatteryPopover`'s runtime estimate is derived from accumulated
+it; rejected. `BankCard`'s runtime estimate is derived from accumulated
 Wh, so the energy total earns its place in the battery UI. Session watts go in
 the grid sub-label and footer instead.
 

@@ -144,7 +144,7 @@ enum Render {
                  dir, "connected-\(name)")
         }
         store.seed(egress: .untried)
-        snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
+        snap(ConnectedPopover(d: battery, showSettings: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
         snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
         snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")
         // Anchored, with a clear action wired: the only state that draws "Stop tracking".

@@ -17,7 +17,7 @@ struct PopoverView: View {
         // Swapping the panel's own (clickable) content sidesteps that entirely.
         //
         // The battery setup screen is routed here for exactly that reason. It
-        // was presented with `.sheet` from BatteryPopover, so even once its
+        // was presented with `.sheet` from the old battery screen, so even once its
         // buttons did something they would not have been clickable — this file
         // already documented the rule the sheet was breaking.
         Group {
@@ -147,11 +147,8 @@ struct PopoverView: View {
 
     @ViewBuilder
     private var statusContent: some View {
-        // Battery hero only when the CLI actually has a bank anchored.
-        if store.data.onBattery && store.data.bankAnchored {
-            BatteryPopover(d: store.data, showSettings: $showSettings, showBankSetup: $showBankSetup)
-        } else {
-            ConnectedPopover(d: store.data, showSettings: $showSettings, showBankSetup: $showBankSetup)
-        }
+        // One panel whether or not a bank is anchored; the bank is a card in
+        // it. See BankCard for why it stopped being a screen of its own.
+        ConnectedPopover(d: store.data, showSettings: $showSettings, showBankSetup: $showBankSetup)
     }
 }
