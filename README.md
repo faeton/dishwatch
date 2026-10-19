@@ -144,8 +144,10 @@ export SL_PB_WH=67          # dish-input Wh per full charge (enables Bank row)
 export SL_PB_START_PCT=100  # bank % when the dish booted (default: 100)
 ```
 
-The anchor auto-invalidates on dish reboot (bootcount mismatch), falling back
-to the `SL_PB_START_PCT` assumption until you set a new one.
+The anchor auto-invalidates on dish reboot — a bootcount change, or a restart
+the counter missed (the dish's boot moment moving forward, or the energy total
+dropping below the anchor's) — falling back to the `SL_PB_START_PCT`
+assumption until you set a new one.
 
 ### Calibrating `SL_PB_WH`
 

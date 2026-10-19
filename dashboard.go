@@ -408,7 +408,7 @@ func buildDashboard(s *dish.Status, h *dish.History, addr string, window int) Da
 // fillBank mirrors pb.go's pbRenderBank anchor branch.
 func fillBank(d *Dashboard, snap *state.Snapshot) {
 	a, _ := loadAnchor()
-	if a == nil || a.Wh <= 0 || a.Boots != snap.Boots {
+	if a == nil || a.Wh <= 0 || !anchorCurrent(a, snap) {
 		return // no usable anchor → stay on mains
 	}
 	d.OnBattery = true

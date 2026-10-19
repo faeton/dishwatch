@@ -935,12 +935,13 @@ dash() {
       # SL_PB_WH env var is set (>0). Anchor depletion is counted directly
       # from integrated Wh since anchor — no extrapolation. If the anchor's
       # bootcount doesn't match the current boot, it's stale.
-      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_boots="" anchor_wh="" anchor_source=""
+      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_up="" anchor_boots="" anchor_wh="" anchor_source=""
       if [[ -s "$SL_PB_ANCHOR" ]]; then
         eval "$(jq -r '
           @sh "anchor_pct=\(.pct // "")",
           @sh "anchor_energy=\(.energyWh // "")",
           @sh "anchor_ts=\(.ts // "")",
+          @sh "anchor_up=\(.uptime // "")",
           @sh "anchor_boots=\(.boots // "")",
           @sh "anchor_wh=\(.wh // "")"' "$SL_PB_ANCHOR" 2>/dev/null || true)"
       fi
@@ -948,7 +949,22 @@ dash() {
       local pb_cap="${anchor_wh:-$SL_PB_WH}"
       if [[ -n "$pb_cap" ]] && awk "BEGIN{exit !($pb_cap+0 > 0)}"; then
       local pb_pct_left pb_used_wh pb_start_pct
+      # Same rule as anchorCurrent in pb.go. Bootcount alone misses a restart
+      # the counter did not record, which resets ENERGY_WH and so read back as
+      # the anchored percentage indefinitely. A restart moves the dish's boot
+      # moment (wall clock − uptime) forward, and usually takes the energy
+      # total below the anchor's; either one retires the anchor.
+      local anchor_ok=0
       if [[ -n "$anchor_boots" && "$anchor_boots" == "$BOOTS" && -n "$anchor_energy" && -n "$anchor_pct" ]]; then
+        anchor_ok=1
+        awk "BEGIN{exit !($ENERGY_WH+0 < $anchor_energy-0.01)}" && anchor_ok=0
+        if [[ "${anchor_ts:-0}" =~ ^[0-9]+$ && "${anchor_up:-0}" =~ ^[0-9]+$ && "${UPS:-}" =~ ^[0-9]+$ ]] \
+           && (( anchor_ts > 0 && anchor_up > 0 )) \
+           && (( (NOW_TS - UPS) - (anchor_ts - anchor_up) > 60 )); then
+          anchor_ok=0
+        fi
+      fi
+      if (( anchor_ok )); then
         pb_used_wh=$(awk "BEGIN{d=$ENERGY_WH-$anchor_energy; if(d<0)d=0; printf \"%.2f\", d}")
         pb_pct_left=$(awk "BEGIN{printf \"%.1f\", $anchor_pct - $pb_used_wh*100/$pb_cap}")
         pb_start_pct="$anchor_pct"

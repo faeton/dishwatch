@@ -55,7 +55,7 @@ func pbRenderBank(w io.Writer, L ui.Layout, pv persisted, avgW float64) {
 
 	var pctLeft, usedWh float64
 	var source string
-	if a != nil && a.Boots == snap.Boots && a.Wh > 0 {
+	if anchorCurrent(a, snap) && a.Wh > 0 {
 		usedWh = snap.EnergyWh - a.EnergyWh
 		if usedWh < 0 {
 			usedWh = 0

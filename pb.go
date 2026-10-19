@@ -119,6 +119,54 @@ func setAnchor(pct float64, wh *float64) (*Anchor, error) {
 	return a, nil
 }
 
+// anchorBootSlackS is how far the dish's implied boot moment may move forward
+// between the anchor and a later snapshot before we call it a different boot.
+// Both moments are `wall clock − uptime`, each rounded to the second and taken
+// on this Mac's clock, so a few seconds of jitter and an NTP step are normal.
+// A real restart moves it by at least the uptime the anchor was set at plus
+// the reboot itself — a minute or more.
+const anchorBootSlackS int64 = 60
+
+// anchorCurrent reports whether an anchor still describes the energy epoch in
+// snap, i.e. whether `snap.EnergyWh − a.EnergyWh` is energy drawn from this bank.
+//
+// Bootcount alone was the test, and it misses the restart integrateEnergy
+// already handles: uptime regressing with the counter unchanged. The
+// accumulator resets, usedWh goes negative, clamps to zero, and the bank reads
+// back at its anchored percentage — a full bank, forever, until re-anchored.
+//
+// Two further checks, each covering the other's blind spot:
+//
+//   - Boot moment. `ts − uptime` is when the dish booted. It does not move
+//     while the dish stays up, and a restart moves it forward, however long ago
+//     that restart was. Needs no new field: the anchor has carried ts and
+//     uptime from the start, in this program and in the bash `sl`.
+//   - Energy going backwards. Catches a restart within the slack above — a
+//     dish that rebooted moments after being anchored — for as long as the new
+//     epoch has drawn less than the old one had.
+//
+// An anchor missing ts or uptime (hand-written, or older than both) keeps the
+// bootcount-only test rather than being thrown away on a technicality.
+func anchorCurrent(a *Anchor, snap *state.Snapshot) bool {
+	if a == nil || snap == nil || a.Boots != snap.Boots {
+		return false
+	}
+	if snap.EnergyWh < a.EnergyWh-0.01 {
+		return false
+	}
+	if a.TS > 0 && a.Uptime > 0 && snap.TS > 0 {
+		// One-sided on purpose. A restart only ever moves the boot moment
+		// forward. Backward is what a stale snapshot looks like: setAnchor
+		// stamps ts with the time now but takes uptime from the last poll, so
+		// the anchor's own boot moment can sit late by however old that poll
+		// was. Treating that as a restart would discard good anchors.
+		if shift := (snap.TS - snap.UptimeS) - (a.TS - a.Uptime); shift > anchorBootSlackS {
+			return false
+		}
+	}
+	return true
+}
+
 // deleteAnchor removes the anchor, under the same lock setAnchor writes it
 // under — otherwise a clear racing a set can land between setAnchor's read of
 // the energy total and its save, and the set wins after the user asked to stop.
