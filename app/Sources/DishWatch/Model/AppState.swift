@@ -441,6 +441,22 @@ final class AppState: ObservableObject {
         await refresh()
     }
 
+    /// Stop tracking the power bank. Maps to `sl pb off`.
+    func clearBankAnchor() async {
+        guard let h = provider as? HelperProvider else {
+            actionResult = "Battery tracking needs a live dish connection."
+            return
+        }
+        do {
+            try await h.clearAnchor()
+            actionResult = "Stopped tracking the power bank."
+        } catch {
+            actionResult = "Could not stop tracking: \(error.localizedDescription)"
+            EngineLog.failure("clearAnchor", error)
+        }
+        await refresh()
+    }
+
     // MARK: - Exit address
 
     /// What the panel knows about where this Mac's traffic leaves.

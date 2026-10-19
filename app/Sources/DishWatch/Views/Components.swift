@@ -19,10 +19,19 @@ struct AppMenuButton: View {
     /// The ellipsis is load-bearing in the macOS sense: it promises the press
     /// opens a confirmation rather than rebooting on the spot.
     var reboot: (() -> Void)? = nil
+    /// Opens the power-bank setup. `nil` leaves the item out.
+    ///
+    /// Before this, the setup screen's only entrance was "Adjust bank…" on the
+    /// battery view — and the battery view only appears once a bank is
+    /// anchored. Nothing in the app could create the first anchor.
+    var powerBank: (() -> Void)? = nil
 
     var body: some View {
         Menu {
             Button("Settings…") { showSettings = true }
+            if let powerBank {
+                Button("Power bank…", action: powerBank)
+            }
             Button("Refresh now", action: refresh)
             if let reboot {
                 Divider()
@@ -44,6 +53,34 @@ struct AppMenuButton: View {
         // menu holds — but a label that lists half the commands and omits the
         // one that drops the connection is wrong in the direction that matters.
         .help("Settings, refresh, reboot & quit")
+    }
+}
+
+/// The outcome of a command — reboot, anchor, stop — with a dismiss button.
+///
+/// Shared because every screen a command can return to has to be able to say
+/// it failed. It lived only on the mains view, so a failed Stop from Settings
+/// or a failed Calibrate from the battery view said nothing at all.
+struct ActionResultBanner: View {
+    var text: String
+    var dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(DW.text.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button(action: dismiss) {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(DW.textA(0.6))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
     }
 }
 

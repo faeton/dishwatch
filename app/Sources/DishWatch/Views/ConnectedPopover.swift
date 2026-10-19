@@ -4,6 +4,7 @@ import SwiftUI
 struct ConnectedPopover: View {
     var d: DishData
     @Binding var showSettings: Bool
+    @Binding var showBankSetup: Bool
     /// Injectable so the render harness can draw a channel this process is not.
     /// `BuildInfo.main` reads `Bundle.main`, and the harness runs as a bare
     /// SwiftPM executable with no Info.plist — so left to itself every snapshot
@@ -22,10 +23,12 @@ struct ConnectedPopover: View {
     /// reach, so the one part of the panel made entirely of wrapping paragraphs
     /// was the one part never checked for wrapping. Same reason `ConfirmStrip`
     /// is a separate view.
-    init(d: DishData, showSettings: Binding<Bool>, build: BuildInfo = .main,
+    init(d: DishData, showSettings: Binding<Bool>,
+         showBankSetup: Binding<Bool> = .constant(false), build: BuildInfo = .main,
          startExpanded: Bool = false) {
         self.d = d
         self._showSettings = showSettings
+        self._showBankSetup = showBankSetup
         self.build = build
         self._detailExpanded = State(initialValue: startExpanded)
     }
@@ -110,24 +113,8 @@ struct ConnectedPopover: View {
                 .padding(.horizontal, 16).padding(.top, 8)
         }
         if let msg = store.actionResult {
-            HStack(spacing: 8) {
-                Text(msg)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DW.text.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button {
-                    store.actionResult = nil
-                } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(DW.textA(0.6))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss")
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
-            .padding(.horizontal, 16).padding(.top, 10)
+            ActionResultBanner(text: msg) { store.actionResult = nil }
+                .padding(.horizontal, 16).padding(.top, 10)
         }
     }
 
@@ -152,7 +139,8 @@ struct ConnectedPopover: View {
                     .font(.system(size: 12)).monospacedDigit().foregroundStyle(DW.textA(0.5))
                 AppMenuButton(showSettings: $showSettings,
                               refresh: { Task { await store.refresh() } },
-                              reboot: { confirmReboot = true })
+                              reboot: { confirmReboot = true },
+                              powerBank: { showBankSetup = true })
             }
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 10)

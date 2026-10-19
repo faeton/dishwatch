@@ -92,7 +92,7 @@ type helperResponse struct {
 	OK       bool   `json:"ok"`
 	Op       string `json:"op,omitempty"` // echoed, so a reply is self-describing
 	// Data is present for `poll` and absent for every command op. That is not
-	// an error condition: `reboot`, `setAnchor` and `ping` acknowledge with
+	// an error condition: `reboot`, `setAnchor`, `clearAnchor` and `ping` acknowledge with
 	// ok=true and no payload. The app used to require Data on every ok reply,
 	// so a *successful* reboot raised "ok with no data", which its retry logic
 	// read as a dead pipe — killing a healthy helper and re-sending the reboot
@@ -328,6 +328,18 @@ func (h *helper) serve(parent context.Context, req helperRequest) {
 			break
 		}
 		if _, err := setAnchor(*req.Pct, req.Wh); err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.OK = true
+		}
+	case "clearAnchor":
+		// `sl pb off`. Clearing an anchor that is not there is a success, not
+		// an error: the app asks for "not tracking", and that is what it got.
+		//
+		// No protocol bump. A protocol-3 helper that predates this op answers
+		// "unknown op" — a loud failure the app surfaces — not a silent wrong
+		// answer, which is what the bumps have been for.
+		if err := deleteAnchor(); err != nil && !os.IsNotExist(err) {
 			resp.Error = err.Error()
 		} else {
 			resp.OK = true

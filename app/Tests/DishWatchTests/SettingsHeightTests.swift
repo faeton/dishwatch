@@ -40,13 +40,13 @@ final class SettingsHeightTests: XCTestCase {
     /// display unused and scrolling anyway.
     ///
     /// Only while the screen binds. Past that the ceiling takes over and stops
-    /// growing, which is correct rather than wasteful: the content is ~885 pt,
-    /// so a 2000 pt display capped at 920 is already showing the whole list.
+    /// growing, which is correct rather than wasteful: the content is ~920 pt,
+    /// so a 2000 pt display capped at 940 is already showing the whole list.
     /// The first version of this test asserted "more than half the screen" and
     /// failed on the large display for exactly that reason — it was measuring
     /// the wrong thing.
     func testTheCapSpendsTheScreenWhileTheScreenIsWhatBinds() {
-        for h in screens where h - 120 < 920 {
+        for h in screens where h - 120 < 940 {
             let cap = SettingsView.contentCap(screenHeight: h)
             XCTAssertEqual(cap, h - 120, accuracy: 1,
                            "\(Int(h))pt screen should give the list everything but the chrome")

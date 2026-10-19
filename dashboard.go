@@ -188,6 +188,13 @@ type Dashboard struct {
 	BankWhLeft      float64 `json:"bankWhLeft"`
 	BankSecondsLeft int     `json:"bankSecondsLeft"`
 	AnchoredAgoText string  `json:"anchoredAgoText"`
+	// The anchor itself and the Wh measured since it, unclamped. Calibration
+	// needs both: capacity = usedWh / (drop / 100), where the drop runs from
+	// the *anchored* percentage to the one the user reads off the bank now.
+	// bankPct cannot stand in for the anchor — it is derived from the very
+	// capacity being solved for, so dividing by it returns the guess.
+	BankAnchorPct float64 `json:"bankAnchorPct"`
+	BankUsedWh    float64 `json:"bankUsedWh"`
 }
 
 // runJSON implements `dishwatch json`: emit one Dashboard snapshot as JSON. On
@@ -417,6 +424,8 @@ func fillBank(d *Dashboard, snap *state.Snapshot) {
 		pctLeft = 0
 	}
 	d.BankPct = round1(pctLeft)
+	d.BankAnchorPct = round1(a.Pct)
+	d.BankUsedWh = round2(usedWh)
 	whLeft := a.Wh * pctLeft / 100
 	d.BankWhLeft = round1(whLeft)
 
@@ -442,6 +451,11 @@ func toMbps(v []float64) []float64 {
 }
 
 func round1(v float64) float64 { return float64(int(v*10+0.5)) / 10 }
+
+// round2 is for figures a later division magnifies: bankUsedWh is a few Wh
+// over a short calibration run, and 0.1 Wh of rounding there is a few percent
+// of the capacity Calibrate solves for.
+func round2(v float64) float64 { return float64(int(v*100+0.5)) / 100 }
 
 // deviceID returns the dish's own identifier, falling back to the hardware
 // version on firmware that doesn't report one. These were previously the same

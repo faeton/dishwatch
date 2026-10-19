@@ -288,6 +288,10 @@ struct DishData: Decodable, Sendable, Equatable {
     var bankWh: Double = 0           // full capacity
     var bankWhLeft: Double = 0
     var bankSecondsLeft: Int = 0
+    /// The percentage the anchor was set at, and the Wh measured since. What
+    /// Calibrate divides; see `BatterySetupSheet.calibratedCapacity`.
+    var bankAnchorPct: Double = 0
+    var bankUsedWh: Double = 0
     var anchoredAgoText: String = ""
 
     var stateLabel: String { state.rawValue }
@@ -718,6 +722,7 @@ extension DishData {
         case pingSeries, pingAvg, downSeries, downMax, downAvg, upSeries, upAvg, powerSeries, powerAvg
         case seriesSeconds
         case dishAddr, onBattery, bankAnchored, bankPct, bankWh, bankWhLeft, bankSecondsLeft, anchoredAgoText
+        case bankAnchorPct, bankUsedWh
     }
 
     init(from decoder: Decoder) throws {
@@ -813,6 +818,8 @@ extension DishData {
         d.bankWh = s(.bankWh, d.bankWh)
         d.bankWhLeft = s(.bankWhLeft, d.bankWhLeft)
         d.bankSecondsLeft = s(.bankSecondsLeft, d.bankSecondsLeft)
+        d.bankAnchorPct = s(.bankAnchorPct, d.bankAnchorPct)
+        d.bankUsedWh = s(.bankUsedWh, d.bankUsedWh)
         d.anchoredAgoText = s(.anchoredAgoText, d.anchoredAgoText)
         self = d
     }

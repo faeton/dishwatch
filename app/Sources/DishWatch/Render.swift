@@ -147,6 +147,8 @@ enum Render {
         snap(BatteryPopover(d: battery, showSettings: .constant(false), showBankSetup: .constant(false)).environmentObject(store).frame(width: 392).background(DW.panel()).environment(\.colorScheme, .dark), dir, "battery")
         snap(CompactWidget(d: .sample, quality: .sample), dir, "compact")
         snap(BatterySetupSheet(d: .sample, onAnchor: { _, _ in }), dir, "setup")
+        // Anchored, with a clear action wired: the only state that draws "Stop tracking".
+        snap(BatterySetupSheet(d: battery, onAnchor: { _, _ in }, onClear: {}), dir, "setup-anchored")
         // `SettingsContent`, not `SettingsView`: ImageRenderer does not
         // rasterize a ScrollView's contents, so snapping the whole screen
         // produced a header over blank space — every control here lives inside

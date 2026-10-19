@@ -7,6 +7,8 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppState
     /// Returns to the status panel (in-panel navigation, not a window).
     var onClose: () -> Void = {}
+    /// Leaves settings for the power-bank setup screen.
+    var onBankSetup: () -> Void = {}
     /// The settings list's own height, measured from the laid-out content.
     @State private var contentHeight: CGFloat = 0
     /// The host screen's usable height, sampled **once** when the panel opens.
@@ -32,7 +34,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             header
             ScrollView {
-                SettingsContent(store: store)
+                SettingsContent(store: store, onBankSetup: onBankSetup)
                     .background(GeometryReader { g in
                         Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
                     })
@@ -116,12 +118,12 @@ struct SettingsView: View {
     /// nonsensical reading cannot produce a zero-height panel, never to override
     /// a screen that is genuinely short.
     ///
-    /// The ceiling is 920 so that an ordinary display does not scroll at all,
+    /// The ceiling is 940 so that an ordinary display does not scroll at all,
     /// which is what was asked for. It has to clear the settings list's own
     /// height — `SettingsHeightTests` measures that list rather than quoting a
     /// number, so adding a row cannot quietly falsify this paragraph.
     static func contentCap(screenHeight: CGFloat) -> CGFloat {
-        max(240, min(920, screenHeight - chrome))
+        max(240, min(940, screenHeight - chrome))
     }
 
     /// The screen the panel is about to open on.
@@ -235,6 +237,7 @@ struct ContentHeightKey: PreferenceKey {
 /// reaching in from `Render` needs a real initialiser.
 struct SettingsContent: View {
     @ObservedObject var store: AppState
+    var onBankSetup: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -266,6 +269,10 @@ struct SettingsContent: View {
             Divider().background(DW.hairline).padding(.vertical, 16)
 
             VStack(spacing: 13) {
+                powerBank
+                if let msg = store.actionResult {
+                    ActionResultBanner(text: msg) { store.actionResult = nil }
+                }
                 toggleRow("Pinned widget — always on top", $store.pinnedWidget)
                 toggleRow("Launch at login", $store.launchAtLogin)
                 if let err = store.launchAtLoginError {
@@ -307,6 +314,48 @@ struct SettingsContent: View {
             }
         }
         .padding(18)
+    }
+
+    // MARK: - power bank
+
+    /// Where the bank is set up, read back, and stopped.
+    ///
+    /// The setup screen existed, but its only door was on the battery view,
+    /// which only appears once a bank is anchored — so the app could edit an
+    /// anchor the CLI made and never make one. This is the door that does not
+    /// depend on already being through it.
+    ///
+    /// One row in the behaviour group rather than a section of its own: the
+    /// list has a no-scroll ceiling (`SettingsHeightTests`), and a labelled
+    /// section with its own divider pushed it past it.
+    private var powerBank: some View {
+        HStack(spacing: 8) {
+            // Title and grey note on one line, the same shape as `toggleRow`.
+            Text("Power bank").font(.system(size: 13))
+            Text(bankSummary).font(.system(size: 12)).foregroundStyle(DW.textA(0.45))
+                .lineLimit(1).minimumScaleFactor(0.75)
+            Spacer(minLength: 8)
+            // Stop stays offered while the dish is unreachable: the anchor
+            // lives on this Mac, so clearing it does not need the dish, and an
+            // offline dashboard carries no anchor fields to say one exists.
+            if store.data.bankAnchored || !store.quality.isTrustworthy {
+                DWButton(title: "Stop", destructive: true) {
+                    Task { await store.clearBankAnchor() }
+                }
+            }
+            DWButton(title: store.data.bankAnchored ? "Adjust…" : "Set up…",
+                     prominent: !store.data.bankAnchored, action: onBankSetup)
+        }
+    }
+
+    private var bankSummary: String {
+        let d = store.data
+        // An offline dashboard omits the bank fields even with an anchor on
+        // disk, so "not tracking" there would be a guess presented as a fact.
+        guard store.quality.isTrustworthy else { return "unknown until the dish answers" }
+        guard d.bankAnchored else { return "not tracking" }
+        let cap = d.bankWh > 0 ? String(format: " · %.0f Wh", d.bankWh) : ""
+        return "\(Int(d.bankPct))%\(cap)"
     }
 
     // MARK: - menu-bar readout

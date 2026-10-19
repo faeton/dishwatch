@@ -215,6 +215,12 @@ final class HelperProvider: DishProvider, @unchecked Sendable {
         _ = try await request(body, retry: false)
     }
 
+    /// Maps to `sl pb off`. Idempotent on the helper side — clearing with no
+    /// anchor set succeeds — so a retry is harmless.
+    func clearAnchor() async throws {
+        _ = try await request(["op": "clearAnchor"], retry: true)
+    }
+
     /// Liveness check that does not touch the dish.
     func ping() async throws {
         _ = try await request(["op": "ping"], retry: true)

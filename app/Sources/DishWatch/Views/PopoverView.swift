@@ -22,13 +22,19 @@ struct PopoverView: View {
         // already documented the rule the sheet was breaking.
         Group {
             if showSettings {
-                SettingsView(onClose: { withAnimation(DW.panelNav) { showSettings = false } })
+                SettingsView(onClose: { withAnimation(DW.panelNav) { showSettings = false } },
+                             onBankSetup: {
+                                 // Straight to setup, and Back from there lands on
+                                 // the status panel — where the result shows.
+                                 withAnimation(DW.panelNav) { showSettings = false; showBankSetup = true }
+                             })
                     .environmentObject(store)
                     .transition(.opacity)
             } else if showBankSetup {
                 BatterySetupSheet(
                     d: store.data,
                     onAnchor: { pct, wh in Task { await store.setBankAnchor(pct: pct, wh: wh) } },
+                    onClear: { Task { await store.clearBankAnchor() } },
                     onDone: { withAnimation(DW.panelNav) { showBankSetup = false } }
                 )
                 .transition(.opacity)
@@ -125,7 +131,7 @@ struct PopoverView: View {
     /// 600 pt" silently overrode a 615 pt display and asked for a panel the
     /// window server clipped.
     ///
-    /// No ceiling, unlike settings. Settings caps at 920 because a settings
+    /// No ceiling, unlike settings. Settings caps at 940 because a settings
     /// list that long is a design problem; the status panel's height is the
     /// data's, and a big display should simply show all of it.
     ///
@@ -143,7 +149,7 @@ struct PopoverView: View {
         if store.data.onBattery && store.data.bankAnchored {
             BatteryPopover(d: store.data, showSettings: $showSettings, showBankSetup: $showBankSetup)
         } else {
-            ConnectedPopover(d: store.data, showSettings: $showSettings)
+            ConnectedPopover(d: store.data, showSettings: $showSettings, showBankSetup: $showBankSetup)
         }
     }
 }

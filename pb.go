@@ -119,7 +119,13 @@ func setAnchor(pct float64, wh *float64) (*Anchor, error) {
 	return a, nil
 }
 
+// deleteAnchor removes the anchor, under the same lock setAnchor writes it
+// under — otherwise a clear racing a set can land between setAnchor's read of
+// the energy total and its save, and the set wins after the user asked to stop.
 func deleteAnchor() error {
+	txn, _ := state.Begin()
+	defer txn.Close()
+
 	p, err := anchorPath()
 	if err != nil {
 		return err

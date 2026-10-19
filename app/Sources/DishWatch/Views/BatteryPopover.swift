@@ -24,6 +24,12 @@ struct BatteryPopover: View {
             // the helper was dead, with no signal anywhere in the panel.
             .opacity(store.quality.isTrustworthy ? 1 : 0.5)
             .saturation(store.quality.isTrustworthy ? 1 : 0)
+            // Anchor, calibrate and stop all land back on this screen, and it
+            // had no place to say one failed — only the mains view rendered it.
+            if let msg = store.actionResult {
+                ActionResultBanner(text: msg) { store.actionResult = nil }
+                    .padding(.horizontal, 16).padding(.top, 10)
+            }
             footer
         }
         .foregroundStyle(DW.text)
@@ -39,7 +45,8 @@ struct BatteryPopover: View {
             Spacer()
             Text(Date.now, format: .dateTime.hour().minute().second())
                 .font(.system(size: 12)).monospacedDigit().foregroundStyle(DW.textA(0.5))
-            AppMenuButton(showSettings: $showSettings, refresh: { Task { await store.refresh() } })
+            AppMenuButton(showSettings: $showSettings, refresh: { Task { await store.refresh() } },
+                              powerBank: { showBankSetup = true })
         }
         .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 8)
     }
@@ -73,6 +80,14 @@ struct BatteryPopover: View {
                 if d.bankSecondsLeft > 0 {
                     Text("dies in").font(.system(size: 12)).foregroundStyle(DW.textA(0.5))
                     timeToEmpty
+                } else if d.bankWhLeft <= 0 {
+                    // The estimate has run the bank down. Zero seconds here is
+                    // an answer, not the missing-average sentinel below; saying
+                    // "no measured draw" would blame the wrong thing.
+                    Text("empty by estimate").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(DW.amber)
+                    Text("re-anchor if it is still running").font(.system(size: 12))
+                        .foregroundStyle(DW.textA(0.45))
                 } else {
                     Text("runtime unknown").font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(DW.textA(0.6))

@@ -4,9 +4,9 @@ package main
 
 // The command table for the engine embedded in DishWatch.app.
 //
-// Four operations reach the dish, and none of them is a verb: the app speaks
-// the line protocol in helper.go and asks for `poll`, `reboot`, `setAnchor`
-// and `ping`. So this build has exactly one real command, and the CLI's
+// Five operations reach the dish, and none of them is a verb: the app speaks
+// the line protocol in helper.go and asks for `poll`, `reboot`, `setAnchor`,
+// `clearAnchor` and `ping`. So this build has exactly one real command, and the CLI's
 // nineteen are not compiled into the submission at all.
 //
 // `--version` survives because the release checks read it and because a binary

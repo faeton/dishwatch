@@ -7,7 +7,7 @@ package main
 // app never asks for.
 //
 // This exists because the bundle used to embed a straight copy of the full CLI.
-// The app uses four operations — poll, reboot, setAnchor, ping — but the binary
+// The app uses five operations — poll, reboot, setAnchor, clearAnchor, ping — but the binary
 // it shipped also carried:
 //
 //   - `speed`, which exec's ping(8) and networkQuality(1). Neither can run
