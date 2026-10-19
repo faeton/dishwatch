@@ -184,14 +184,48 @@ func (s *Snapshot) ObservedCoversBoot() bool {
 // which cannot reach ~/.cache) can supply its own container path without this
 // package having to know anything about it.
 //
-// The default stays ~/.cache/sl rather than os.UserCacheDir() on purpose: the
-// bash `sl` hardcodes that path, and moving it silently would orphan existing
-// users' energy history. See docs/roadmap.md for the migration.
+// The fallback stays ~/.cache/sl rather than os.UserCacheDir() on purpose: the
+// bash `sl` uses the same rule (see DefaultDir), and moving it silently would
+// orphan existing users' energy history.
 var dirOverride string
 
 // SetDir overrides the cache directory for the life of the process. Pass "" to
 // restore the default.
 func SetDir(d string) { dirOverride = d }
+
+// AppContainerCache is where the sandboxed macOS app keeps this directory,
+// relative to the real home: the sandbox points the helper's $HOME at the
+// container, so its own ~/.cache/sl lands here.
+const AppContainerCache = "Library/Containers/com.faeton.dishwatch/Data/.cache/sl"
+
+// DefaultDir picks the storage directory for a process whose home is home.
+//
+// The CLI and the app used to keep separate copies of everything — energy,
+// stats, events and the power-bank anchor — because the sandbox cannot reach
+// ~/.cache/sl. So a bank anchored in the app was invisible to `sl pb`, and
+// `sl pb off` did not stop the app tracking. Sharing has to go the other way:
+// the CLI is unsandboxed and can use the app's folder.
+//
+// So: $SL_CACHE if set; otherwise the app's container folder once the app has
+// created it; otherwise ~/.cache/sl. Inside the sandbox (APP_SANDBOX_CONTAINER_ID
+// set) the container rule is skipped — $HOME already is the container, and
+// joining the container path onto it names a folder that does not exist.
+//
+// The whole directory, not only pb.json: an anchor is a percentage paired
+// with the energy total *of the state.json beside it*, so an anchor read
+// against another store's total is wrong by the difference.
+func DefaultDir(home string, getenv func(string) string) string {
+	if d := getenv("SL_CACHE"); d != "" {
+		return d
+	}
+	if getenv("APP_SANDBOX_CONTAINER_ID") == "" {
+		app := filepath.Join(home, AppContainerCache)
+		if fi, err := os.Stat(app); err == nil && fi.IsDir() {
+			return app
+		}
+	}
+	return filepath.Join(home, ".cache", "sl")
+}
 
 // CacheDir returns the storage directory, creating it if missing.
 func CacheDir() (string, error) {
@@ -201,7 +235,7 @@ func CacheDir() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, ".cache", "sl")
+		dir = DefaultDir(home, os.Getenv)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

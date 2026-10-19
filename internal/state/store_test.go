@@ -281,3 +281,32 @@ func TestPlanChangeLogsRealTransitions(t *testing.T) {
 		})
 	}
 }
+
+// The CLI follows the app into its container once the app has made one, so
+// both read one anchor against one energy total.
+func TestDefaultDirSharesTheAppContainer(t *testing.T) {
+	home := t.TempDir()
+	env := map[string]string{}
+	getenv := func(k string) string { return env[k] }
+	legacy := filepath.Join(home, ".cache", "sl")
+	app := filepath.Join(home, AppContainerCache)
+
+	if got := DefaultDir(home, getenv); got != legacy {
+		t.Fatalf("no app yet: got %s, want %s", got, legacy)
+	}
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultDir(home, getenv); got != app {
+		t.Fatalf("app installed: got %s, want %s", got, app)
+	}
+	// Inside the sandbox $HOME is already the container.
+	env["APP_SANDBOX_CONTAINER_ID"] = "com.faeton.dishwatch"
+	if got := DefaultDir(home, getenv); got != legacy {
+		t.Fatalf("sandboxed: got %s, want %s", got, legacy)
+	}
+	env["SL_CACHE"] = "/somewhere"
+	if got := DefaultDir(home, getenv); got != "/somewhere" {
+		t.Fatalf("SL_CACHE: got %s", got)
+	}
+}

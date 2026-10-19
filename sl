@@ -4,7 +4,17 @@
 set -euo pipefail
 DISH="${STARLINK_DISH:-192.168.100.1:9200}"
 SVC="SpaceX.API.Device.Device/Handle"
-SL_CACHE="$HOME/.cache/sl"
+# Same rule as state.DefaultDir: $SL_CACHE, else the macOS app's container
+# once the app has made it (so `sl pb` and the app share one anchor and one
+# energy total), else ~/.cache/sl.
+if [[ -z "${SL_CACHE:-}" ]]; then
+  if [[ -z "${APP_SANDBOX_CONTAINER_ID:-}" \
+        && -d "$HOME/Library/Containers/com.faeton.dishwatch/Data/.cache/sl" ]]; then
+    SL_CACHE="$HOME/Library/Containers/com.faeton.dishwatch/Data/.cache/sl"
+  else
+    SL_CACHE="$HOME/.cache/sl"
+  fi
+fi
 SL_STATE="$SL_CACHE/state.json"
 SL_EVENTS="$SL_CACHE/events.log"
 SL_PB_ANCHOR="$SL_CACHE/pb.json"
