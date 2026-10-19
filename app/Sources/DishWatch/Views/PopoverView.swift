@@ -48,6 +48,8 @@ struct PopoverView: View {
         // is the same mechanism that already handles the popover growing when
         // the detail row expands.
         .frame(width: showSettings ? DW.settingsWidth : DW.panelWidth)
+        // The window does not follow the content by itself — see the fitter.
+        .background(PanelWindowFitter())
         // Vibrancy: blurred desktop behind a translucent gradient tint, not a
         // flat opaque card (per design review).
         .background(.ultraThinMaterial)
