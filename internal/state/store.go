@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -227,15 +228,28 @@ func DefaultDir(home string, getenv func(string) string) string {
 	return filepath.Join(home, ".cache", "sl")
 }
 
+// defaultDir caches DefaultDir for the life of the process. Re-deciding on
+// every call let the answer change mid-transaction: the app creating its
+// container while a CLI held ~/.cache/sl/.lock would send that CLI's later
+// loads and saves into the container, under the wrong lock, pairing one
+// store's energy with the other's state.
+var defaultDir = sync.OnceValues(func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return DefaultDir(home, os.Getenv), nil
+})
+
 // CacheDir returns the storage directory, creating it if missing.
 func CacheDir() (string, error) {
 	dir := dirOverride
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		d, err := defaultDir()
 		if err != nil {
 			return "", err
 		}
-		dir = DefaultDir(home, os.Getenv)
+		dir = d
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

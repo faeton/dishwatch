@@ -63,6 +63,18 @@ func fetchDash(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History
 }
 
 func fetchDashPersist(ctx context.Context, c *dish.Client) (*dish.Status, *dish.History, error, error) {
+	// The lock is taken before the RPCs, not after. Taken after, two writers
+	// could each fetch and then commit in the opposite order: the older
+	// response lands second, rewinds lastCurrent while keeping the newer
+	// total, and the next poll integrates the rewound samples twice — or, if
+	// uptime fell back far enough, reads as a restart and wipes the epoch.
+	// The CLI and the app's helper share this directory and poll it
+	// concurrently, so that ordering is routine rather than theoretical.
+	// Holding the lock across the fetch makes "fetched later" and "committed
+	// later" the same thing. The cost is the other writer waiting one RPC.
+	txn, _ := state.Begin()
+	defer txn.Close()
+
 	type statusRes struct {
 		s   *dish.Status
 		err error
@@ -80,7 +92,7 @@ func fetchDashPersist(ctx context.Context, c *dish.Client) (*dish.Status, *dish.
 	if sr.err != nil {
 		return nil, nil, nil, sr.err
 	}
-	return sr.s, hr.h, snapshotAndLog(sr.s, hr.h), nil
+	return sr.s, hr.h, snapshotAndLogLocked(sr.s, hr.h), nil
 }
 
 // snapshotAndLog compares the new snapshot against the persisted one, updates
@@ -96,7 +108,13 @@ func snapshotAndLog(s *dish.Status, h *dish.History) error {
 	// can't be taken we still do the work, same as before it existed.
 	txn, _ := state.Begin()
 	defer txn.Close()
+	return snapshotAndLogLocked(s, h)
+}
 
+// snapshotAndLogLocked is snapshotAndLog for a caller that already holds the
+// state lock. flock belongs to the open file description, so a second Begin
+// in the same process would wait on its own lock forever.
+func snapshotAndLogLocked(s *dish.Status, h *dish.History) error {
 	prev, _ := state.Load()
 	now := time.Now().Unix()
 	cur := &state.Snapshot{

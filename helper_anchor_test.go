@@ -98,9 +98,38 @@ func TestAnchorCurrent(t *testing.T) {
 			t.Errorf("%s: anchorCurrent = %v, want %v", c.name, got, c.want)
 		}
 	}
+	// With an epoch recorded, the epoch alone decides. A forward clock
+	// correction moves the boot moment but not the epoch; a restart moves the
+	// epoch however far the new total has since climbed.
+	e := &Anchor{Pct: 90, Wh: 67, EnergyWh: 20, Uptime: 3600, Boots: 4, TS: 100_000, Epoch: 96_400}
+	if !anchorCurrent(e, &state.Snapshot{Boots: 4, TS: 102_000, UptimeS: 5400, EnergyWh: 30, ObsStartTs: 96_400}) {
+		t.Error("epoch unchanged, clock jumped 200 s forward: anchor should stand")
+	}
+	if anchorCurrent(e, &state.Snapshot{Boots: 4, TS: 101_800, UptimeS: 5400, EnergyWh: 30, ObsStartTs: 100_620}) {
+		t.Error("epoch moved: anchor should be retired even with energy past the anchor's")
+	}
+
 	// Missing ts/uptime keeps the old bootcount-only rule.
 	legacy := &Anchor{Pct: 90, Wh: 67, EnergyWh: 20, Boots: 4}
 	if !anchorCurrent(legacy, &state.Snapshot{Boots: 4, TS: 200_000, UptimeS: 10, EnergyWh: 25}) {
 		t.Error("legacy anchor without ts/uptime should survive on bootcount alone")
+	}
+}
+
+// setAnchor has to record the epoch, or every new anchor falls back to the
+// wall-clock inference the epoch exists to replace.
+func TestSetAnchorRecordsEpoch(t *testing.T) {
+	state.SetDir(t.TempDir())
+	t.Cleanup(func() { state.SetDir("") })
+	if err := state.Save(&state.Snapshot{Boots: 4, UptimeS: 5400, EnergyWh: 12, ObsStartTs: 96_400}); err != nil {
+		t.Fatal(err)
+	}
+	wh := 67.0
+	a, err := setAnchor(80, &wh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Epoch != 96_400 {
+		t.Fatalf("epoch = %d, want 96400", a.Epoch)
 	}
 }

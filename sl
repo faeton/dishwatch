@@ -84,8 +84,8 @@ _sl_lock() {
   # takes either. Go blocks for as long as another process holds the lock, and
   # only continues unlocked when acquisition itself *errors* — a missing
   # directory, not a busy peer. Ten seconds is already far longer than any
-  # honest holder needs, since the critical section is pure arithmetic with the
-  # RPCs outside it.
+  # honest holder needs: the critical section is two dish RPCs (bounded by
+  # their own timeouts) and arithmetic.
   #
   # A `case` and not a chain of && / ||. Those have equal precedence and group
   # left to right, so `A && lockf || B && flock` parses as `((A && lockf) || B)
@@ -420,8 +420,15 @@ row() { printf '%b%-42s%b   %b\n' "" "$1" "" "$2"; }
 # ---------- dashboard ----------
 dash() {
   local json
+  # ---- state transaction ----
+  # Taken before the RPCs, as dash.go does. Taken after, this process and the
+  # app's helper (which share this directory) could fetch in one order and
+  # commit in the other: the older reading lands second, rewinds lastCurrent
+  # under the newer total, and the next poll integrates those samples twice.
+  _sl_lock || exit 1
   if ! json=$(call '{"get_status":{}}' 2>/dev/null); then
     _sl_mark_unreachable
+    _sl_unlock
     _dash_unreachable
     return 0
   fi
@@ -545,13 +552,9 @@ dash() {
 
   local NOW_TS; NOW_TS=$(date +%s)
 
-  # ---- state transaction ----
-  # Everything from here to _sl_diff_and_log is one read-modify-write over
-  # state.json. Holding the lock only around the write would not help, because
-  # the damage comes from two processes reading the same lastCurrent rather
-  # than from their writes overlapping — see _sl_lock for what that damage
-  # actually is (lost updates and state/stats skew, not double-counting).
-  _sl_lock || exit 1
+  # Everything from the lock above to _sl_diff_and_log is one read-modify-write
+  # over state.json, and the readings it integrates were fetched under the same
+  # lock, so a later fetch is always a later commit.
 
   local PREV_BOOTS="" PREV_UPS="" PREV_ENERGY=0 PREV_LAST_CUR="" PREV_OBS_TS="" PREV_OBS_UP=""
   if [[ -s "$SL_STATE" ]]; then
@@ -945,13 +948,14 @@ dash() {
       # SL_PB_WH env var is set (>0). Anchor depletion is counted directly
       # from integrated Wh since anchor — no extrapolation. If the anchor's
       # bootcount doesn't match the current boot, it's stale.
-      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_up="" anchor_boots="" anchor_wh="" anchor_source=""
+      local anchor_pct="" anchor_energy="" anchor_ts="" anchor_up="" anchor_epoch="" anchor_boots="" anchor_wh="" anchor_source=""
       if [[ -s "$SL_PB_ANCHOR" ]]; then
         eval "$(jq -r '
           @sh "anchor_pct=\(.pct // "")",
           @sh "anchor_energy=\(.energyWh // "")",
           @sh "anchor_ts=\(.ts // "")",
           @sh "anchor_up=\(.uptime // "")",
+          @sh "anchor_epoch=\(.epoch // "")",
           @sh "anchor_boots=\(.boots // "")",
           @sh "anchor_wh=\(.wh // "")"' "$SL_PB_ANCHOR" 2>/dev/null || true)"
       fi
@@ -967,6 +971,13 @@ dash() {
       local anchor_ok=0
       if [[ -n "$anchor_boots" && "$anchor_boots" == "$BOOTS" && -n "$anchor_energy" && -n "$anchor_pct" ]]; then
         anchor_ok=1
+      fi
+      # An anchor that recorded the accumulator's epoch (obsStartTs, written
+      # fresh only on a reset) is current exactly while it matches; the
+      # inferences below are for anchors from before the field.
+      if (( anchor_ok )) && [[ "${anchor_epoch:-0}" =~ ^[1-9][0-9]*$ && "${OBS_START_TS:-0}" =~ ^[1-9][0-9]*$ ]]; then
+        [[ "$anchor_epoch" == "$OBS_START_TS" ]] || anchor_ok=0
+      elif (( anchor_ok )); then
         awk "BEGIN{exit !($ENERGY_WH+0 < $anchor_energy-0.01)}" && anchor_ok=0
         if [[ "${anchor_ts:-0}" =~ ^[0-9]+$ && "${anchor_up:-0}" =~ ^[0-9]+$ && "${UPS:-}" =~ ^[0-9]+$ ]] \
            && (( anchor_ts > 0 && anchor_up > 0 )) \
@@ -1309,11 +1320,11 @@ EOF
     [[ -z "$wh" ]] && wh="$prev_wh"
     if [[ -n "$wh" ]]; then
       anchor=$(jq -c --argjson pct "$pct" --argjson wh "$wh" --argjson ts "$(date +%s)" \
-        '{pct:$pct, wh:$wh, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
+        '{pct:$pct, wh:$wh, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts, epoch:(.obsStartTs // 0)}' \
         "$SL_STATE")
     else
       anchor=$(jq -c --argjson pct "$pct" --argjson ts "$(date +%s)" \
-        '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts}' \
+        '{pct:$pct, energyWh:(.energyWh // 0), uptime:(.uptimeS // 0), boots:(.boots // 0), ts:$ts, epoch:(.obsStartTs // 0)}' \
         "$SL_STATE")
     fi
     _sl_write_atomic "$SL_PB_ANCHOR" "$anchor"

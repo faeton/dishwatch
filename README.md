@@ -145,9 +145,9 @@ export SL_PB_START_PCT=100  # bank % when the dish booted (default: 100)
 ```
 
 The anchor auto-invalidates on dish reboot — a bootcount change, or a restart
-the counter missed (the dish's boot moment moving forward, or the energy total
-dropping below the anchor's) — falling back to the `SL_PB_START_PCT`
-assumption until you set a new one.
+the counter missed, which resets the energy accumulator the anchor was taken
+against — falling back to the `SL_PB_START_PCT` assumption until you set a new
+one.
 
 ### Calibrating `SL_PB_WH`
 

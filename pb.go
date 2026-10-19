@@ -24,6 +24,10 @@ type Anchor struct {
 	Uptime   int64   `json:"uptime,omitempty"`
 	Boots    int     `json:"boots,omitempty"`
 	TS       int64   `json:"ts,omitempty"`
+	// Epoch is the state snapshot's ObsStartTs when the anchor was set. That
+	// field is written fresh only when the energy accumulator resets, so it
+	// names the accumulator EnergyWh above was read from. See anchorCurrent.
+	Epoch int64 `json:"epoch,omitempty"`
 }
 
 func anchorPath() (string, error) {
@@ -107,6 +111,7 @@ func setAnchor(pct float64, wh *float64) (*Anchor, error) {
 		Uptime:   snap.UptimeS,
 		Boots:    snap.Boots,
 		TS:       time.Now().Unix(),
+		Epoch:    snap.ObsStartTs,
 	}
 	if wh != nil {
 		a.Wh = *wh
@@ -147,9 +152,19 @@ const anchorBootSlackS int64 = 60
 //
 // An anchor missing ts or uptime (hand-written, or older than both) keeps the
 // bootcount-only test rather than being thrown away on a technicality.
+//
+// An anchor that recorded the accumulator's epoch skips all of that: it is
+// current exactly while the epoch is unchanged. The inferences above are only
+// for anchors written before the field existed, and they have two known
+// failures the epoch does not — a forward clock correction over the slack
+// reads as a restart, and an anchor refused by the energy check comes back
+// once the new epoch's total climbs past the old one.
 func anchorCurrent(a *Anchor, snap *state.Snapshot) bool {
 	if a == nil || snap == nil || a.Boots != snap.Boots {
 		return false
+	}
+	if a.Epoch != 0 && snap.ObsStartTs != 0 {
+		return a.Epoch == snap.ObsStartTs
 	}
 	if snap.EnergyWh < a.EnergyWh-0.01 {
 		return false
