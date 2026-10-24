@@ -126,11 +126,8 @@ UNIVERSAL   ?= 0
 HELPER_TARGET := $(if $(filter 1,$(UNIVERSAL)),helper-universal,helper)
 ifeq ($(UNIVERSAL),1)
 SWIFT_ARCH    := --arch arm64 --arch x86_64
-# Capitalised, and a different tree entirely, when SwiftPM is given --arch.
-SWIFT_PRODUCT := .build/apple/Products/$(shell echo $(CONFIG) | awk '{print toupper(substr($$0,1,1)) substr($$0,2)}')/$(APP)
 else
 SWIFT_ARCH    :=
-SWIFT_PRODUCT := $(BUILD_DIR)/$(APP)
 endif
 
 .PHONY: app helper-fresh run icon clean-app test dmg notarize notarize-app verify-release \
@@ -168,9 +165,17 @@ app: helper-fresh
 	swift build -c $(CONFIG) $(SWIFT_ARCH)
 	rm -rf "$(APP_DIR)"
 	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
-	# A multi-arch `swift build` writes to .build/apple/Products/<Config>/,
-	# not .build/<config>/ — so $(BUILD_DIR) is wrong precisely when it matters.
-	cp "$(SWIFT_PRODUCT)" "$(CONTENTS)/MacOS/$(APP)"
+	# Ask SwiftPM where it put the product rather than hardcoding the tree. The
+	# multi-arch path moved under Swift 6.4 (.build/apple/Products/Release →
+	# .build/out/Products/Release), and the hardcoded one still held an Aug 24
+	# binary — so v0.2.10 shipped 0.2.9's UI in a correctly versioned, signed,
+	# notarized bundle. The freshness check refuses a product older than any
+	# source, whatever SwiftPM does to its layout next. (Not "newer than this
+	# run": an up-to-date build doesn't relink, and that must still pass.)
+	@bin="$$(swift build -c $(CONFIG) $(SWIFT_ARCH) --show-bin-path)/$(APP)"; \
+	 stale="$$(find Sources Package.swift -newer "$$bin" -print -quit)"; \
+	 test -z "$$stale" || { echo "  $$bin is older than $$stale — SwiftPM wrote its product somewhere else" >&2; exit 1; }; \
+	 echo "  cp $$bin"; cp "$$bin" "$(CONTENTS)/MacOS/$(APP)"
 	# The engine. A sandboxed app cannot reach a CLI installed outside its
 	# bundle, so this is not a convenience — it is the only path that works for
 	# the Store build.
