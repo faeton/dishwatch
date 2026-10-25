@@ -230,14 +230,29 @@ final class AppState: ObservableObject {
     /// right now (battery off a bank) drops out rather than rendering a zero.
     var menuBarTexts: [MenuBarItem] {
         let live = quality.showsLiveReadings
+        let missing = menuBarDishMissing
         return MenuBarField.allCases.compactMap { f in
+            // With no dish at all the not-found glyph already says every live
+            // field is unavailable; a row of dashes beside it only repeats that.
+            if missing && f.isLiveReading { return nil }
             guard menuBarFields.contains(f), let t = f.text(data, live: live) else { return nil }
             return MenuBarItem(field: f, text: t)
         }
     }
 
     /// Whether the bar should draw the ping sparkline.
-    var showsMenuBarSpark: Bool { menuBarFields.contains(.pingSpark) }
+    var showsMenuBarSpark: Bool { menuBarFields.contains(.pingSpark) && !menuBarDishMissing }
+
+    /// Nothing answered at the dish address, so the bar draws a not-found glyph
+    /// in place of its own and drops the live fields rather than dashing them.
+    ///
+    /// Only `.offline`: a stale or loading bar may be seconds from a reading,
+    /// and keeps its shape with dashes; a missing dish is a state the user has
+    /// to do something about, and `— ↓— ↑—` did not read as one.
+    var menuBarDishMissing: Bool {
+        if case .offline = quality { return true }
+        return false
+    }
 
     /// The trace the bar plots — empty when there is no live reading behind it,
     /// which `MenuBarSpark` draws as a dashed midline rather than as a frozen

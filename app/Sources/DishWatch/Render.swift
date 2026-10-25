@@ -233,6 +233,19 @@ enum Render {
             snap(MenuBarIconContent(store: s).padding(6).background(Color(white: 0.9)),
                  dir, "bar-\(name)")
         }
+        // No dish at the address: the not-found glyph, and only the running
+        // totals beside it. Needs a provider that is not `SampleProvider`, or
+        // quality reads `.sample` and the bar shows the numbers instead.
+        struct Offline: DishProvider {
+            func poll(window: Int) async throws -> DishData { var d = DishData.sample; d.state = .offline; return d }
+        }
+        for (name, fields) in [("notfound", AppState.defaultFields), ("notfound-bank", [.ping, .down, .battery])] {
+            var d = DishData.sample; d.state = .offline; d.bankAnchored = true; d.bankPct = 64
+            let s = AppState(provider: Offline()); s.seed(d)
+            s.iconMode = .signalBars; s.menuBarFields = Set(fields)
+            snap(MenuBarIconContent(store: s).padding(6).background(Color(white: 0.9)),
+                 dir, "bar-\(name)")
+        }
         // The coloured readout, on both bars.
         //
         // Every other bar shot above is a template image: one ink, tinted for

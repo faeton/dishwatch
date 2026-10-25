@@ -103,6 +103,9 @@ struct MenuBarLabel: View {
         /// being true — a template image draws the same bytes on either bar.
         let colored: Bool
         let darkBar: Bool
+        /// The not-found glyph replaces the usual one; `text` alone cannot see
+        /// that when no text field is on.
+        let dishMissing: Bool
     }
 
     @MainActor private static var cacheKey: GlyphKey?
@@ -123,7 +126,8 @@ struct MenuBarLabel: View {
             colored: colored,
             // Only meaningful when coloured; pinned otherwise so a monochrome
             // readout does not re-render on an appearance change it ignores.
-            darkBar: colored && darkBar
+            darkBar: colored && darkBar,
+            dishMissing: store.menuBarDishMissing
         )
         if key == cacheKey, let img = cacheImage { return img }
         let img = render(store: store, darkBar: darkBar)
@@ -267,7 +271,11 @@ struct MenuBarIconContent: View {
         // a dead link is the same lie as a stale ping beside them.
         let bars = SignalBars(color: ink, height: 12, barWidth: 2.4,
                               fraction: store.menuBarSignalFraction)
-        if useBattery {
+        if store.menuBarDishMissing {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ink)
+        } else if useBattery {
             BatteryGlyph(fraction: Double(Self.bankPercent(d)) / 100,
                          color: ink, width: 20, height: 11)
         } else {

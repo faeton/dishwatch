@@ -117,7 +117,10 @@ final class MenuBarTests: XCTestCase {
     /// throughput at zero. The popover dims itself and says "no dish at this
     /// address"; the bar went on reading `31ms ↓0.0 ↑0.0` beside it — a stale
     /// ping presented as current, and a zero presented as a measurement.
-    func testOfflineDishDashesEveryLiveField() async {
+    ///
+    /// Now a missing dish drops the live fields entirely: the not-found glyph
+    /// says it once, where a row of dashes said nothing the user could act on.
+    func testOfflineDishDropsEveryLiveField() async {
         var d = DishData.sample
         d.state = .offline
         d.pingMs = 31          // whatever was last persisted
@@ -127,7 +130,9 @@ final class MenuBarTests: XCTestCase {
         await s.refresh()
         s.menuBarFields = [.ping, .down, .up, .signal, .power]
 
-        XCTAssertEqual(s.menuBarText, "— ↓— ↑— — —")
+        XCTAssertTrue(s.menuBarDishMissing)
+        XCTAssertEqual(s.menuBarText, "")
+        XCTAssertFalse(s.showsMenuBarSpark)
         XCTAssertEqual(s.menuBarSignalFraction, 0, "four lit bars over a dead link is the same lie")
         XCTAssertTrue(s.menuBarSparkValues.isEmpty, "a frozen trace keeps implying a link")
     }
@@ -139,6 +144,7 @@ final class MenuBarTests: XCTestCase {
         await s.refresh()
         s.menuBarFields = [.ping, .down, .up]
 
+        XCTAssertFalse(s.menuBarDishMissing, "a failed poll may recover next second; keep the shape")
         XCTAssertEqual(s.menuBarText, "— ↓— ↑—")
     }
 
